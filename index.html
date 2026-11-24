@@ -271,6 +271,8 @@ const sfxSync       = () => { sfx(660,0.1,'sawtooth'); setTimeout(()=>sfx(990,0.
 const sfxHit        = () => sfx(160,0.25,'sawtooth',0.1);
 const sfxPickup     = () => { sfx(300,0.15,'sine',0.08); setTimeout(()=>sfx(450,0.15,'sine',0.08),80); };
 const sfxWin        = () => [523,659,784,1047].forEach((f,i)=>setTimeout(()=>sfx(f,0.2,'triangle',0.09), i*110));
+// a fuller fanfare for completing the entire journey, not just one level
+const sfxVictory     = () => [392,523,659,784,1047,1319].forEach((f,i)=>setTimeout(()=>sfx(f,0.35,'triangle',0.1), i*140));
 
 // ambient organ-pad drone + slow swell (original composition, not a cover)
 let ambient = null;
@@ -342,6 +344,7 @@ function stopAmbient(){
 // -------------------------------------------------------- GAME STATE
 // 'title' | 'playing' | 'paused' | 'dead' | 'levelclear' | 'victory' | 'gameover'
 let state = 'title';
+let uiTick = 0; // advances every drawn frame regardless of play state - drives victory fireworks
 let level = 1, lives = 3, score = 0;
 let multiplier = 1, syncCooldown = 0;
 let frame = 0, distance = 0, worldSpeed = LEVEL_THEMES[0].speed;
@@ -378,7 +381,9 @@ function makeObstacles(theme){
     x += theme.gap + Math.random()*80;
     if(x >= SPAWN_LIMIT) break;
     if(Math.random() < 0.3){
-      list.push({ x, w:26, h:20, hang:true, y: GROUND_Y-46, passed:false });
+      // positioned so a standing player's head clearly clips it, but a
+      // ducking player (DUCK_H tall) clears it with a safe margin
+      list.push({ x, w:26, h:20, hang:true, y: GROUND_Y-34, passed:false });
     } else {
       list.push({ x, w:20, h:20+Math.random()*26, hang:false, spike: Math.random()<0.5, passed:false });
     }
@@ -472,13 +477,14 @@ function loseLife(){
 }
 
 function completeLevel(){
-  sfxWin();
   if(level >= LEVEL_THEMES.length){
     saveBestIfRecord();
     state = 'victory';
     stopAmbient();
+    sfxVictory();
   } else {
     state = 'levelclear';
+    sfxWin();
   }
 }
 
@@ -919,6 +925,36 @@ function drawVignette(){
   ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
 }
 
+// procedural fireworks for the victory screen - deterministic from uiTick,
+// so it needs no particle-physics integration and runs even while paused on
+// the win screen (the main update() loop only runs during 'playing')
+const FIREWORK_SEEDS = Array.from({length:6}, (_, i) => ({
+  cx: 60 + (i * 70) % (LOGICAL_W - 100) + 40,
+  cy: 40 + (i * 53) % 90,
+  color: ['#06d6a0','#ffd166','#4cc9f0','#f72585','#c77dff','#ef476f'][i],
+  offset: i * 37,
+}));
+function drawFireworks(){
+  const cycle = 90; // frames per firework burst
+  for(const fw of FIREWORK_SEEDS){
+    const t = (uiTick + fw.offset) % cycle;
+    const progress = t / cycle;
+    if(progress > 0.75) continue; // pause between bursts
+    const radius = progress * 40;
+    const alpha = 1 - progress/0.75;
+    const spokes = 10;
+    for(let i=0;i<spokes;i++){
+      const a = (i/spokes) * Math.PI*2;
+      const x = fw.cx + Math.cos(a)*radius;
+      const y = fw.cy + Math.sin(a)*radius;
+      ctx.globalAlpha = Math.max(alpha, 0);
+      ctx.fillStyle = fw.color;
+      ctx.fillRect(x-1.5, y-1.5, 3, 3);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawOverlay(){
   const dim = (a) => { ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H); };
   if(state === 'paused'){
@@ -942,13 +978,15 @@ function drawOverlay(){
       { text:'Press Space (or ↑) for level '+(level+1)+'.', font:'14px monospace', color:'#ffd166' },
     ], 130, 30);
   } else if(state === 'victory'){
-    dim(0.65);
+    dim(0.5);
+    drawFireworks();
     centerText([
-      { text:'You win!', font:'bold 30px monospace', color:'#06d6a0' },
-      { text:'Final score: '+Math.floor(score/5)+'.', font:'16px monospace' },
+      { text:'JOURNEY COMPLETE', font:'bold 22px monospace', color:'#ffd166' },
+      { text:'You crossed every finish line.', font:'14px monospace' },
+      { text:'Final score: '+Math.floor(score/5)+'.', font:'16px monospace', color:'#06d6a0' },
       { text:'Best: '+Math.floor(best/5)+'.', font:'14px monospace', color:'#ffd166' },
       { text:'Press Space (or ↑) to play again.', font:'14px monospace', color:'#888' },
-    ], 120, 32);
+    ], 70, 28);
   } else if(state === 'gameover'){
     dim(0.65);
     centerText([
@@ -985,6 +1023,7 @@ function draw(){
 // ------------------------------------------------------------------ LOOP
 function loop(){
   if(state === 'playing') update();
+  uiTick++;
   draw();
   requestAnimationFrame(loop);
 }

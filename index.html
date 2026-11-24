@@ -6,12 +6,16 @@
 <style>
   html,body{margin:0;background:#0d0d14;overflow:hidden;height:100%;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#eee}
   #wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
-  canvas{background:#15151f;border:3px solid #333;border-radius:6px;box-shadow:0 0 40px rgba(6,214,160,0.15)}
+  canvas{background:#15151f;border:3px solid #333;border-radius:6px;box-shadow:0 0 40px rgba(6,214,160,0.15);touch-action:none}
   #hud{display:flex;justify-content:space-between;width:480px;font-size:14px;letter-spacing:1px}
   #hud span{color:#ffd166}
-  #hint{font-size:12px;color:#666}
+  #hint,#touchHint{font-size:12px;color:#666}
   #wrap.shake{animation:shk 0.25s}
-  @keyframes shk{0%{transform:translate(0,0)}20%{transform:translate(-6px,4px)}40%{transform:translate(6px,-4px)}60%{transform:translate(-4px,2px)}80%{transform:translate(4px,-2px)}100%{transform:translate(0,0)}}
+  @keyframes shk{
+    0%{transform:translate(0,0)} 20%{transform:translate(-6px,4px)}
+    40%{transform:translate(6px,-4px)} 60%{transform:translate(-4px,2px)}
+    80%{transform:translate(4px,-2px)} 100%{transform:translate(0,0)}
+  }
 </style>
 </head>
 <body>
@@ -19,94 +23,137 @@
   <div id="hud">
     <div>SCORE <span id="score">0</span></div>
     <div>LIVES <span id="lives">3</span></div>
-    <div>LEVEL <span id="level">1</span>/5</div>
+    <div>LEVEL <span id="level">1</span>/<span id="levelMax">5</span></div>
     <div>BEST <span id="best">0</span></div>
   </div>
   <canvas id="c" width="480" height="320"></canvas>
   <div id="hint">UP / SPACE jump (hold for higher) &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; ESC pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
-  <div id="touchHint" style="font-size:12px;color:#555;display:none">Tap top half to jump &middot; hold bottom half to duck</div>
+  <div id="touchHint" style="display:none">Tap top half to jump &middot; hold bottom half to duck</div>
 </div>
 <script>
+'use strict';
+
+// =========================================================================
+// ECHO — a runner where you race against a recorded ghost of your own
+// last attempt. Free, offline, single-file, no external assets.
+// =========================================================================
+
+// ---------------------------------------------------------------- CONSTANTS
+const GROUND_Y = 260;
+const GRAVITY = 0.6;
+const FALL_GRAVITY_MULT = 1.5;   // fall faster than you rise -> snappier jumps
+const JUMP_V = -11;
+const DOUBLE_JUMP_V = JUMP_V * 0.85;
+const SHORT_HOP_DAMP = 0.45;     // releasing jump early cuts the arc short
+const LEVEL_LENGTH = 3200;
+const PLAYER_W = 24, PLAYER_H = 24, DUCK_H = 12;
+const SYNC_DISTANCE = 18;        // how close player+ghost must be, mid-air, to sync
+const SYNC_COOLDOWN = 60;
+const MAX_MULTIPLIER = 5;
+const BEST_KEY = 'echo_best_score';
+
+const LEVEL_THEMES = [
+  { name:'MEADOW', skyTop:'#2b2d5e', skyBot:'#15151f', hill:'#1f2140', ground:'#2a2a3a', ob:'#ef476f', speed:4.0, gap:240, stars:false },
+  { name:'CANYON', skyTop:'#3a2440', skyBot:'#1a1420', hill:'#2a1a30', ground:'#3a2a3a', ob:'#f78c6b', speed:4.6, gap:215, stars:false },
+  { name:'VOID',   skyTop:'#101035', skyBot:'#0a0a16', hill:'#161638', ground:'#242450', ob:'#c77dff', speed:5.2, gap:195, stars:true  },
+  { name:'STORM',  skyTop:'#241533', skyBot:'#101018', hill:'#1c1228', ground:'#2a1f3a', ob:'#ff6b9d', speed:5.8, gap:180, stars:true  },
+  { name:'CORE',   skyTop:'#1a0a10', skyBot:'#060608', hill:'#200c10', ground:'#3a2a2a', ob:'#ffd166', speed:6.6, gap:165, stars:true  },
+];
+// how far past the level length the finish line starts, so it scrolls into
+// view and reaches the player right as the level actually completes
+const FINISH_LEAD = 80;
+
+// ------------------------------------------------------------------- DOM
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const scoreEl = document.getElementById('score');
 const livesEl = document.getElementById('lives');
 const levelEl = document.getElementById('level');
+const levelMaxEl = document.getElementById('levelMax');
 const bestEl = document.getElementById('best');
+const wrapEl = document.getElementById('wrap');
+levelMaxEl.textContent = LEVEL_THEMES.length;
 
-const GROUND_Y = 260;
-const GRAVITY = 0.6;
-const JUMP_V = -11;
-const LEVEL_LENGTH = 3200;
-
-// ---- persistent high score (free, local only) ----
-const BEST_KEY = 'echo_best_score';
+// --------------------------------------------------------- PERSISTENCE
 let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10);
-bestEl.textContent = best;
+bestEl.textContent = Math.floor(best/5);
 
-// ---- synthesized sound (no files) ----
+function saveBestIfRecord(){
+  if(score > best){
+    best = score;
+    localStorage.setItem(BEST_KEY, best);
+    bestEl.textContent = Math.floor(best/5);
+  }
+}
+
+// ----------------------------------------------------------- AUDIO (free, synthesized, no files)
 let audioCtx = null;
+function ensureAudio(){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
 function sfx(freq, dur, type='square', vol=0.08){
   try{
-    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    const ac = ensureAudio();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
     osc.type = type; osc.frequency.value = freq; gain.gain.value = vol;
-    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.connect(gain); gain.connect(ac.destination);
     osc.start();
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
-    osc.stop(audioCtx.currentTime + dur);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+    osc.stop(ac.currentTime + dur);
+  } catch(e){ /* audio unsupported/blocked - game still works silently */ }
+}
+// a short "clock tick" instead of a generic beep (Interstellar-style motif,
+// original/synthesized - not a reproduction of any copyrighted score)
+function sfxTick(pitchMul=1){
+  try{
+    const ac = ensureAudio();
+    const t = ac.currentTime;
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 1800 * pitchMul;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.09, t+0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t+0.045);
+    osc.connect(gain); gain.connect(ac.destination);
+    osc.start(t); osc.stop(t+0.05);
   } catch(e){}
 }
-// clock "tick" motif (Interstellar-style) instead of a plain beep
-function sfxTick(pitchMul=1){
-  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-  const t = audioCtx.currentTime;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = 'sine';
-  osc.frequency.value = 1800 * pitchMul;
-  gain.gain.setValueAtTime(0.0001, t);
-  gain.gain.exponentialRampToValueAtTime(0.09, t+0.002);
-  gain.gain.exponentialRampToValueAtTime(0.0001, t+0.045);
-  osc.connect(gain); gain.connect(audioCtx.destination);
-  osc.start(t); osc.stop(t+0.05);
-}
-const sfxJump = ()=>sfxTick(1);
-const sfxDoubleJump = ()=>sfxTick(1.5);
-const sfxCoin = ()=>{ sfx(880,0.08,'triangle'); setTimeout(()=>sfx(1320,0.08,'triangle'),40); };
-const sfxSync = ()=>{ sfx(660,0.1,'sawtooth'); setTimeout(()=>sfx(990,0.15,'sawtooth'),60); };
-const sfxHit  = ()=>sfx(160,0.25,'sawtooth',0.1);
-const sfxShield = ()=>{ sfx(300,0.15,'sine',0.08); setTimeout(()=>sfx(450,0.15,'sine',0.08),80); };
-const sfxWin  = ()=>{ [523,659,784,1047].forEach((f,i)=>setTimeout(()=>sfx(f,0.2,'triangle',0.09), i*110)); };
+const sfxJump       = () => sfxTick(1);
+const sfxDoubleJump = () => sfxTick(1.5);
+const sfxCoin       = () => { sfx(880,0.08,'triangle'); setTimeout(()=>sfx(1320,0.08,'triangle'),40); };
+const sfxSync       = () => { sfx(660,0.1,'sawtooth'); setTimeout(()=>sfx(990,0.15,'sawtooth'),60); };
+const sfxHit        = () => sfx(160,0.25,'sawtooth',0.1);
+const sfxPickup     = () => { sfx(300,0.15,'sine',0.08); setTimeout(()=>sfx(450,0.15,'sine',0.08),80); };
+const sfxWin        = () => [523,659,784,1047].forEach((f,i)=>setTimeout(()=>sfx(f,0.2,'triangle',0.09), i*110));
 
-// --- ambient Interstellar-style organ drone (two detuned low oscillators + slow swell) ---
+// ambient organ-pad drone + slow swell (original composition, not a cover)
 let ambient = null;
 function startAmbient(){
-  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  const ac = ensureAudio();
   stopAmbient();
-  const master = audioCtx.createGain();
+  const master = ac.createGain();
   master.gain.value = 0;
-  master.connect(audioCtx.destination);
-  master.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 2);
+  master.connect(ac.destination);
+  master.gain.linearRampToValueAtTime(0.05, ac.currentTime + 2);
 
-  const freqs = [55, 55*1.5, 55*2];
-  const oscs = freqs.map((f, i) => {
-    const osc = audioCtx.createOscillator();
+  const oscs = [55, 55*1.5, 55*2].map((freq, i) => {
+    const osc = ac.createOscillator();
     osc.type = 'sine';
-    osc.frequency.value = f;
+    osc.frequency.value = freq;
     osc.detune.value = (i-1) * 4;
-    const g = audioCtx.createGain();
+    const g = ac.createGain();
     g.gain.value = i === 0 ? 1 : 0.4;
     osc.connect(g); g.connect(master);
     osc.start();
     return osc;
   });
 
-  // slow swell LFO on master gain for that "breathing" organ feel
-  const lfo = audioCtx.createOscillator();
+  const lfo = ac.createOscillator();
   lfo.frequency.value = 0.08;
-  const lfoGain = audioCtx.createGain();
+  const lfoGain = ac.createGain();
   lfoGain.gain.value = 0.015;
   lfo.connect(lfoGain); lfoGain.connect(master.gain);
   lfo.start();
@@ -115,67 +162,78 @@ function startAmbient(){
 }
 function stopAmbient(){
   if(!ambient) return;
-  const t = audioCtx.currentTime;
+  const ac = ensureAudio();
+  const t = ac.currentTime;
   try{
     ambient.master.gain.cancelScheduledValues(t);
     ambient.master.gain.setValueAtTime(ambient.master.gain.value, t);
     ambient.master.gain.linearRampToValueAtTime(0, t+0.8);
-    setTimeout(()=>{ ambient.oscs.forEach(o=>o.stop()); ambient.lfo.stop(); }, 850);
+    const toStop = ambient;
+    setTimeout(()=>{ toStop.oscs.forEach(o=>o.stop()); toStop.lfo.stop(); }, 850);
   } catch(e){}
   ambient = null;
 }
 
-// ---- game state machine ----
-// states: 'title' | 'playing' | 'paused' | 'dead' | 'levelclear' | 'victory' | 'gameover'
+// -------------------------------------------------------- GAME STATE
+// 'title' | 'playing' | 'paused' | 'dead' | 'levelclear' | 'victory' | 'gameover'
 let state = 'title';
-let level = 1;
-let lives = 3;
-let score = 0;
-let multiplier = 1;
-let syncCooldown = 0;
-let popups = [];
-let frame = 0;
-let distance = 0;
-let worldSpeed = 4;
+let level = 1, lives = 3, score = 0;
+let multiplier = 1, syncCooldown = 0;
+let frame = 0, distance = 0, worldSpeed = LEVEL_THEMES[0].speed;
+let finishLineX = 0;
 
-let player, obstacles, coins, powerups;
-let inputLog = [], ghostLog = [], ghostPlayer = null, ghostIdx = 0, ghostDuckIdx = 0;
-let duckLog = [], ghostDuckLog = [];
+let player, ghostPlayer;
+let obstacles, coins, powerups, popups, particles;
+let inputLog, duckLog, ghostLog, ghostDuckLog, ghostIdx, ghostDuckIdx;
 
-const LEVEL_THEMES = [
-  { name: 'MEADOW', skyTop:'#2b2d5e', skyBot:'#15151f', hill:'#1f2140', ground: '#2a2a3a', ob: '#ef476f', speed: 4,   gap: 240, stars:false },
-  { name: 'CANYON', skyTop:'#3a2440', skyBot:'#1a1420', hill:'#2a1a30', ground: '#3a2a3a', ob: '#f78c6b', speed: 4.6, gap: 215, stars:false },
-  { name: 'VOID',   skyTop:'#101035', skyBot:'#0a0a16', hill:'#161638', ground: '#242450', ob: '#c77dff', speed: 5.2, gap: 195, stars:true },
-  { name: 'STORM',  skyTop:'#241533', skyBot:'#101018', hill:'#1c1228', ground: '#2a1f3a', ob: '#ff6b9d', speed: 5.8, gap: 180, stars:true },
-  { name: 'CORE',   skyTop:'#1a0a10', skyBot:'#060608', hill:'#200c10', ground: '#3a2a2a', ob: '#ffd166', speed: 6.6, gap: 165, stars:true },
-];
+const stars = Array.from({length:60}, () => ({
+  x: Math.random()*480, y: Math.random()*220, s: Math.random()*1.5+0.5
+}));
+const hills = Array.from({length:6}, (_, i) => ({
+  x: i*160, w: 140+Math.random()*60, h: 40+Math.random()*50
+}));
 
-// obstacle types: 'ground' (jump over) and 'hang' (duck under)
+// --------------------------------------------------------- ENTITY FACTORIES
+function newPlayer(){
+  return {
+    x: 60, y: GROUND_Y, vy: 0, w: PLAYER_W, h: PLAYER_H,
+    onGround: true, ducking: false,
+    hasShield: false, doubleJumpAvailable: false, usedDoubleJump: false,
+  };
+}
+
 function makeObstacles(theme){
-  let obs = [];
+  const list = [];
   let x = 500;
   while(x < LEVEL_LENGTH){
     x += theme.gap + Math.random()*80;
-    const isHang = Math.random() < 0.3;
-    if(isHang){
-      obs.push({ x, w: 26, h: 20, hang: true, y: GROUND_Y - 46 });
+    if(Math.random() < 0.3){
+      list.push({ x, w:26, h:20, hang:true, y: GROUND_Y-46, passed:false });
     } else {
-      obs.push({ x, w: 20, h: 20 + Math.random()*26, hang: false, spike: Math.random() < 0.5 });
+      list.push({ x, w:20, h:20+Math.random()*26, hang:false, spike: Math.random()<0.5, passed:false });
     }
   }
-  return obs;
+  return list;
+}
+function makeCoins(){
+  const list = [];
+  let x = 420;
+  while(x < LEVEL_LENGTH){
+    x += 170 + Math.random()*60;
+    list.push({ x, y: GROUND_Y-50-Math.random()*40, r:6, collected:false });
+  }
+  return list;
+}
+function makePowerups(){
+  const list = [];
+  let x = 700;
+  while(x < LEVEL_LENGTH){
+    x += 500 + Math.random()*400;
+    list.push({ x, y: GROUND_Y-60, r:9, collected:false, type: Math.random()<0.5 ? 'shield' : 'jump2' });
+  }
+  return list;
 }
 
-// background stars for later levels
-let stars = [];
-for(let i=0;i<60;i++){ stars.push({ x: Math.random()*480, y: Math.random()*220, s: Math.random()*1.5+0.5 }); }
-
-// parallax hill silhouettes
-let hills = [];
-for(let i=0;i<6;i++){ hills.push({ x: i*160, w: 140+Math.random()*60, h: 40+Math.random()*50 }); }
-
-// particle trail behind the player
-let particles = [];
 function spawnTrail(p){
   particles.push({ x:p.x+p.w/2, y:p.y-p.h/2, life:16, vx:-worldSpeed*0.3-Math.random(), vy:(Math.random()-0.5), c:'#06d6a0', size:3 });
 }
@@ -186,73 +244,119 @@ function spawnBurst(x, y, color, count=14){
   }
 }
 
-let shakeFrames = 0;
-const wrapEl = document.getElementById('wrap');
-function makeCoins(theme){
-  let coins = [];
-  let x = 420;
-  while(x < LEVEL_LENGTH){
-    x += 170 + Math.random()*60;
-    coins.push({ x, y: GROUND_Y - 50 - Math.random()*40, r: 6, collected: false });
-  }
-  return coins;
-}
-function makePowerups(theme){
-  let pu = [];
-  let x = 700;
-  while(x < LEVEL_LENGTH){
-    x += 500 + Math.random()*400;
-    const type = Math.random() < 0.5 ? 'shield' : 'jump2';
-    pu.push({ x, y: GROUND_Y - 60, r: 9, collected: false, type });
-  }
-  return pu;
-}
-
-function newPlayer(){ return { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true, ducking:false, hasShield:false, doubleJumpAvailable:false, usedDoubleJump:false }; }
-
+// ------------------------------------------------------------- FLOW CONTROL
 function startLevel(keepGhost){
   const theme = LEVEL_THEMES[level-1];
   worldSpeed = theme.speed;
   distance = 0; frame = 0;
+  finishLineX = LEVEL_LENGTH + FINISH_LEAD;
+
   player = newPlayer();
   obstacles = makeObstacles(theme);
-  coins = makeCoins(theme);
-  powerups = makePowerups(theme);
-  multiplier = 1; syncCooldown = 0; popups = [];
-  if(keepGhost && inputLog.length){ ghostLog = inputLog.slice(); ghostDuckLog = duckLog.slice(); }
+  coins = makeCoins();
+  powerups = makePowerups();
+  multiplier = 1; syncCooldown = 0;
+  popups = []; particles = [];
+
+  if(keepGhost && inputLog && inputLog.length){
+    ghostLog = inputLog.slice();
+    ghostDuckLog = duckLog.slice();
+  }
   inputLog = []; duckLog = [];
-  if(ghostLog.length){ ghostPlayer = newPlayer(); ghostIdx = 0; ghostDuckIdx = 0; } else { ghostPlayer = null; }
-  particles = [];
+  if(ghostLog && ghostLog.length){
+    ghostPlayer = newPlayer();
+    ghostIdx = 0; ghostDuckIdx = 0;
+  } else {
+    ghostPlayer = null;
+  }
   state = 'playing';
 }
 
 function startGame(){
   level = 1; lives = 3; score = 0;
-  ghostLog = []; ghostPlayer = null;
+  ghostLog = []; ghostDuckLog = []; ghostPlayer = null;
   livesEl.textContent = lives;
   levelEl.textContent = level;
-  scoreEl.textContent = score;
+  scoreEl.textContent = 0;
   startLevel(false);
   startAmbient();
 }
 
+function loseLife(){
+  lives--;
+  livesEl.textContent = lives;
+  sfxHit();
+  spawnBurst(player.x+player.w/2, player.y-player.h/2, '#ef476f', 20);
+  wrapEl.classList.remove('shake'); void wrapEl.offsetWidth; wrapEl.classList.add('shake');
+  if(lives <= 0){
+    saveBestIfRecord();
+    state = 'gameover';
+    stopAmbient();
+  } else {
+    state = 'dead';
+  }
+}
+
+function completeLevel(){
+  sfxWin();
+  if(level >= LEVEL_THEMES.length){
+    saveBestIfRecord();
+    state = 'victory';
+    stopAmbient();
+  } else {
+    state = 'levelclear';
+  }
+}
+
+// --------------------------------------------------------------- PHYSICS
 function jump(p){
   if(p.onGround){
     p.vy = JUMP_V; p.onGround = false; p.usedDoubleJump = false;
     return 'ground';
-  } else if(p.doubleJumpAvailable && !p.usedDoubleJump){
-    p.vy = JUMP_V * 0.85; p.usedDoubleJump = true;
+  }
+  if(p.doubleJumpAvailable && !p.usedDoubleJump){
+    p.vy = DOUBLE_JUMP_V; p.usedDoubleJump = true;
     return 'double';
   }
   return null;
 }
+function applyJumpSound(result){
+  if(result === 'double') sfxDoubleJump();
+  else if(result === 'ground') sfxJump();
+}
+function shortHop(p){
+  if(p && p.vy < -2) p.vy *= SHORT_HOP_DAMP;
+}
 function physics(p){
-  // fall faster than you rise - snappier, more "real" platformer feel
-  p.vy += p.vy > 0 ? GRAVITY * 1.5 : GRAVITY;
+  p.vy += p.vy > 0 ? GRAVITY * FALL_GRAVITY_MULT : GRAVITY;
   p.y += p.vy;
   if(p.y >= GROUND_Y){ p.y = GROUND_Y; p.vy = 0; p.onGround = true; }
 }
-function rectsOverlap(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
+function rectsOverlap(a,b){
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+function playerHitbox(p){
+  const h = p.ducking ? DUCK_H : p.h;
+  return { x:p.x, y:p.y-h, w:p.w, h };
+}
+
+// --------------------------------------------------------------- INPUT
+function setDuck(down){
+  if(state !== 'playing' || !player || player.ducking === down) return;
+  player.ducking = down;
+  duckLog.push({ frame, down });
+}
+function tryJump(){
+  if(state !== 'playing') return;
+  inputLog.push(frame);
+  applyJumpSound(jump(player));
+}
+function advanceFromEndScreen(){
+  if(state === 'title'){ startGame(); }
+  else if(state === 'dead'){ startLevel(true); }
+  else if(state === 'levelclear'){ level++; levelEl.textContent = level; startLevel(true); }
+  else if(state === 'victory' || state === 'gameover'){ startGame(); }
+}
 
 window.addEventListener('keydown', (e)=>{
   if(e.code === 'Escape' && (state === 'playing' || state === 'paused')){
@@ -260,88 +364,108 @@ window.addEventListener('keydown', (e)=>{
     state = state === 'playing' ? 'paused' : 'playing';
     return;
   }
-  if(e.code !== 'Space' && e.code !== 'ArrowUp') return;
-  e.preventDefault();
-
-  if(state === 'title'){ startGame(); return; }
-  if(state === 'dead'){ // lost a life, same level, ghost carries over
-    startLevel(true); return;
-  }
-  if(state === 'levelclear'){
-    level++;
-    levelEl.textContent = level;
-    startLevel(true);
-    return;
-  }
-  if(state === 'victory' || state === 'gameover'){ startGame(); return; }
-  if(state === 'playing'){
-    inputLog.push(frame);
-    const result = jump(player);
-    if(result === 'double') sfxDoubleJump();
-    else if(result === 'ground') sfxJump();
+  if(e.code === 'ArrowDown'){ setDuck(true); return; }
+  if(e.code === 'Space' || e.code === 'ArrowUp'){
+    e.preventDefault();
+    if(state === 'playing') tryJump();
+    else advanceFromEndScreen();
   }
 });
 window.addEventListener('keyup', (e)=>{
-  if((e.code === 'Space' || e.code === 'ArrowUp') && player && player.vy < -2){
-    player.vy *= 0.45; // short-hop: release early for a lower jump
-  }
+  if(e.code === 'ArrowDown'){ setDuck(false); return; }
+  if(e.code === 'Space' || e.code === 'ArrowUp') shortHop(player);
 });
 
-// touch controls: tap top half = jump, hold bottom half = duck
+// touch controls: tap top half = jump, hold bottom half = duck,
+// tap anywhere on a non-playing screen advances it
 if('ontouchstart' in window){
   document.getElementById('touchHint').style.display = 'block';
   canvas.addEventListener('touchstart', (e)=>{
     e.preventDefault();
+    if(state !== 'playing'){ advanceFromEndScreen(); return; }
     const rect = canvas.getBoundingClientRect();
     const touchY = e.touches[0].clientY - rect.top;
-    if(state === 'title' || state === 'dead' || state === 'levelclear' || state === 'victory' || state === 'gameover'){
-      window.dispatchEvent(new KeyboardEvent('keydown', { code:'Space' }));
-      return;
-    }
-    if(touchY > canvas.height/2){
-      player.ducking = true;
-      duckLog.push({ frame, down: true });
-    } else {
-      inputLog.push(frame);
-      const result = jump(player);
-      if(result === 'double') sfxDoubleJump();
-      else if(result === 'ground') sfxJump();
-    }
+    if(touchY > canvas.height/2) setDuck(true);
+    else tryJump();
   }, { passive:false });
   canvas.addEventListener('touchend', (e)=>{
     e.preventDefault();
-    if(player && player.ducking){
-      player.ducking = false;
-      duckLog.push({ frame, down: false });
-    }
-    if(player && player.vy < -2) player.vy *= 0.45;
+    setDuck(false);
+    shortHop(player);
   }, { passive:false });
 }
-window.addEventListener('keydown', (e)=>{
-  if(e.code === 'ArrowDown' && state === 'playing' && !player.ducking){
-    player.ducking = true;
-    duckLog.push({ frame, down: true });
-  }
-});
-window.addEventListener('keyup', (e)=>{
-  if(e.code === 'ArrowDown' && state === 'playing' && player.ducking){
-    player.ducking = false;
-    duckLog.push({ frame, down: false });
-  }
-});
 
-function endRunLoseLife(){
-  lives--;
-  livesEl.textContent = lives;
-  sfxHit();
-  spawnBurst(player.x+player.w/2, player.y-player.h/2, '#ef476f', 20);
-  wrapEl.classList.remove('shake'); void wrapEl.offsetWidth; wrapEl.classList.add('shake');
-  if(lives <= 0){
-    if(score > best){ best = score; localStorage.setItem(BEST_KEY, best); bestEl.textContent = best; }
-    state = 'gameover';
-    stopAmbient();
-  } else {
-    state = 'dead';
+// ----------------------------------------------------------------- UPDATE
+function updateTickingClock(){
+  const progress = distance / LEVEL_LENGTH;
+  const tickInterval = Math.max(10, 36 - level*3 - progress*14);
+  if(frame % Math.round(tickInterval) === 0) sfxTick(0.5 + progress*0.3);
+}
+
+function updateGhost(){
+  if(!ghostPlayer){ multiplier = 1; return; }
+
+  if(ghostIdx < ghostLog.length && ghostLog[ghostIdx] === frame){ jump(ghostPlayer); ghostIdx++; }
+  while(ghostDuckIdx < ghostDuckLog.length && ghostDuckLog[ghostDuckIdx].frame === frame){
+    ghostPlayer.ducking = ghostDuckLog[ghostDuckIdx].down;
+    ghostDuckIdx++;
+  }
+  physics(ghostPlayer);
+
+  if(syncCooldown > 0) syncCooldown--;
+  const bothAirborne = !player.onGround && !ghostPlayer.onGround;
+  const closeTogether = Math.abs(player.y - ghostPlayer.y) < SYNC_DISTANCE;
+  if(bothAirborne && closeTogether && syncCooldown === 0){
+    multiplier = Math.min(multiplier + 1, MAX_MULTIPLIER);
+    syncCooldown = SYNC_COOLDOWN;
+    popups.push({ x: player.x, y: player.y-50, text: 'SYNC x'+multiplier, life: 40 });
+    sfxSync();
+  }
+}
+
+function updateObstacleCollisions(){
+  const pBox = playerHitbox(player);
+  for(const o of obstacles){
+    if(o.passed) continue;
+    const oBox = o.hang ? { x:o.x, y:o.y, w:o.w, h:o.h } : { x:o.x, y:GROUND_Y-o.h, w:o.w, h:o.h };
+    if(!rectsOverlap(pBox, oBox)) continue;
+
+    if(player.hasShield){
+      player.hasShield = false;
+      o.passed = true;
+      sfxPickup();
+      popups.push({ x: player.x, y: player.y-50, text: 'SHIELD BROKE', life: 30 });
+    } else {
+      loseLife();
+      return true; // signal caller to stop processing this frame
+    }
+  }
+  return false;
+}
+
+function updatePickups(){
+  for(const pu of powerups){
+    if(pu.collected) continue;
+    const dx = (player.x+player.w/2)-pu.x, dy = (player.y-player.h/2)-pu.y;
+    if(Math.hypot(dx,dy) >= 18) continue;
+    pu.collected = true;
+    if(pu.type === 'shield'){
+      player.hasShield = true;
+      popups.push({ x:pu.x, y:pu.y, text:'SHIELD UP', life:35 });
+    } else {
+      player.doubleJumpAvailable = true;
+      popups.push({ x:pu.x, y:pu.y, text:'DOUBLE JUMP', life:35 });
+    }
+    sfxPickup();
+  }
+  for(const c of coins){
+    if(c.collected) continue;
+    const dx = (player.x+player.w/2)-c.x, dy = (player.y-player.h/2)-c.y;
+    if(Math.hypot(dx,dy) >= 16) continue;
+    c.collected = true;
+    score += 20*multiplier;
+    popups.push({ x:c.x, y:c.y, text:'+'+(20*multiplier), life:30 });
+    sfxCoin();
   }
 }
 
@@ -351,134 +475,46 @@ function update(){
   score += 1 * multiplier;
   scoreEl.textContent = Math.floor(score/5);
 
-  // ambient ticking clock, tempo rises as the level progresses (Interstellar tension motif)
-  const progress = distance / LEVEL_LENGTH;
-  const tickInterval = Math.max(10, 36 - level*3 - progress*14);
-  if(frame % Math.round(tickInterval) === 0){
-    sfxTick(0.5 + progress*0.3);
-  }
+  updateTickingClock();
 
   physics(player);
   if(frame % 3 === 0) spawnTrail(player);
   for(const pt of particles){ pt.x += pt.vx; pt.y += pt.vy; pt.life--; }
   particles = particles.filter(pt => pt.life > 0);
 
-  if(ghostPlayer){
-    if(ghostIdx < ghostLog.length && ghostLog[ghostIdx] === frame){ jump(ghostPlayer); ghostIdx++; }
-    while(ghostDuckIdx < ghostDuckLog.length && ghostDuckLog[ghostDuckIdx].frame === frame){
-      ghostPlayer.ducking = ghostDuckLog[ghostDuckIdx].down;
-      ghostDuckIdx++;
-    }
-    physics(ghostPlayer);
-    if(syncCooldown > 0) syncCooldown--;
-    const bothAir = !player.onGround && !ghostPlayer.onGround;
-    const close = Math.abs(player.y - ghostPlayer.y) < 18;
-    if(bothAir && close && syncCooldown === 0){
-      multiplier = Math.min(multiplier + 1, 5);
-      syncCooldown = 60;
-      popups.push({ x: player.x, y: player.y - 50, text: 'SYNC x'+multiplier, life: 40 });
-      sfxSync();
-    }
-  } else {
-    multiplier = 1;
-  }
+  updateGhost();
 
   for(const o of obstacles) o.x -= worldSpeed;
   for(const c of coins) c.x -= worldSpeed;
   for(const pu of powerups) pu.x -= worldSpeed;
+  finishLineX -= worldSpeed;
 
-  const pH = player.ducking ? 12 : player.h;
-  const pBox = { x: player.x, y: player.y - pH, w: player.w, h: pH };
-  for(const o of obstacles){
-    if(o.passed) continue;
-    const oBox = o.hang
-      ? { x: o.x, y: o.y, w: o.w, h: o.h }
-      : { x: o.x, y: GROUND_Y - o.h, w: o.w, h: o.h };
-    if(rectsOverlap(pBox, oBox)){
-      if(player.hasShield){
-        player.hasShield = false;
-        o.passed = true;
-        sfxShield();
-        popups.push({ x: player.x, y: player.y - 50, text: 'SHIELD BROKE', life: 30 });
-      } else {
-        endRunLoseLife(); return;
-      }
-    }
-  }
+  if(updateObstacleCollisions()) return; // life lost this frame, stop here
+  updatePickups();
 
-  for(const pu of powerups){
-    if(pu.collected) continue;
-    const dx = (player.x+player.w/2)-pu.x, dy=(player.y-player.h/2)-pu.y;
-    if(Math.sqrt(dx*dx+dy*dy) < 18){
-      pu.collected = true;
-      if(pu.type === 'shield'){
-        player.hasShield = true;
-        popups.push({ x: pu.x, y: pu.y, text: 'SHIELD UP', life: 35 });
-      } else {
-        player.doubleJumpAvailable = true;
-        popups.push({ x: pu.x, y: pu.y, text: 'DOUBLE JUMP', life: 35 });
-      }
-      sfxShield();
-    }
-  }
-  for(const c of coins){
-    if(c.collected) continue;
-    const dx = (player.x+player.w/2)-c.x, dy=(player.y-player.h/2)-c.y;
-    if(Math.sqrt(dx*dx+dy*dy) < 16){
-      c.collected = true;
-      score += 20*multiplier;
-      popups.push({ x:c.x, y:c.y, text:'+'+(20*multiplier), life:30 });
-      sfxCoin();
-    }
-  }
   popups = popups.filter(p => (p.life-- > 0));
 
-  if(distance >= LEVEL_LENGTH){
-    if(level >= LEVEL_THEMES.length){
-      if(score > best){ best = score; localStorage.setItem(BEST_KEY, best); bestEl.textContent = best; }
-      state = 'victory';
-      sfxWin();
-      stopAmbient();
-    } else {
-      state = 'levelclear';
-      sfxWin();
-    }
-  }
+  if(distance >= LEVEL_LENGTH) completeLevel();
 }
 
+// ----------------------------------------------------------------- DRAW
 function centerText(lines, startY=120, lineH=30){
   ctx.textAlign = 'center';
-  lines.forEach((l, i)=>{
+  for(let i=0;i<lines.length;i++){
+    const l = lines[i];
     ctx.font = l.font || '16px monospace';
     ctx.fillStyle = l.color || '#eee';
     ctx.fillText(l.text, canvas.width/2, startY + i*lineH);
-  });
+  }
   ctx.textAlign = 'left';
 }
 
-function draw(){
-  const theme = LEVEL_THEMES[level-1] || LEVEL_THEMES[0];
+function drawBackground(theme){
   const grad = ctx.createLinearGradient(0,0,0,canvas.height);
   grad.addColorStop(0, theme.skyTop);
   grad.addColorStop(1, theme.skyBot);
   ctx.fillStyle = grad;
   ctx.fillRect(0,0,canvas.width,canvas.height);
-
-  if(state === 'title'){
-    centerText([
-      { text:'ECHO', font:'bold 44px monospace', color:'#06d6a0' },
-      { text:'race against your own ghost', font:'14px monospace' },
-      { text:'5 levels · sync multiplier · duck + jump · 3 lives', font:'12px monospace', color:'#888' },
-      { text:'press SPACE to start', font:'16px monospace', color:'#ffd166' },
-    ], 110, 34);
-    return;
-  }
-
-  // world progress bar
-  ctx.fillStyle = '#222';
-  ctx.fillRect(10, 10, 100, 6);
-  ctx.fillStyle = '#06d6a0';
-  ctx.fillRect(10, 10, Math.min(100, 100*distance/LEVEL_LENGTH), 6);
 
   if(theme.stars){
     ctx.fillStyle = '#fff';
@@ -489,7 +525,6 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
-  // parallax hills
   ctx.fillStyle = theme.hill;
   for(const h of hills){
     h.x -= worldSpeed*0.25; if(h.x < -h.w) h.x += hills.length*160;
@@ -499,7 +534,6 @@ function draw(){
     ctx.fill();
   }
 
-  // ground with lane texture
   ctx.fillStyle = theme.ground;
   ctx.fillRect(0, GROUND_Y+24, canvas.width, 6);
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
@@ -511,21 +545,38 @@ function draw(){
   ctx.lineTo(canvas.width, GROUND_Y+27);
   ctx.stroke();
   ctx.setLineDash([]);
+}
 
-  // particle trail / bursts
+function drawFinishLine(){
+  if(finishLineX < -40 || finishLineX > canvas.width+40) return;
+  const poleTop = GROUND_Y - 90;
+  ctx.fillStyle = '#eee';
+  ctx.fillRect(finishLineX, poleTop, 4, GROUND_Y - poleTop + 24);
+  // checkered flag
+  const flagW = 26, flagH = 16, rows = 4, cols = 4;
+  const cw = flagW/cols, ch = flagH/rows;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      ctx.fillStyle = (r+c)%2===0 ? '#111' : '#eee';
+      ctx.fillRect(finishLineX+4+c*cw, poleTop+r*ch, cw, ch);
+    }
+  }
+}
+
+function drawEntities(theme){
   for(const pt of particles){
     ctx.globalAlpha = Math.max(pt.life/30, 0) * 0.7;
-    ctx.fillStyle = pt.c || '#06d6a0';
-    const s = pt.size || 3;
-    ctx.fillRect(pt.x, pt.y, s, s);
+    ctx.fillStyle = pt.c;
+    ctx.fillRect(pt.x, pt.y, pt.size, pt.size);
   }
   ctx.globalAlpha = 1;
 
   if(ghostPlayer){
-    const gh = ghostPlayer.ducking ? 12 : ghostPlayer.h;
+    const box = playerHitbox(ghostPlayer);
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.fillRect(ghostPlayer.x, ghostPlayer.y-gh, ghostPlayer.w, gh);
+    ctx.fillRect(box.x, box.y, box.w, box.h);
   }
+
   ctx.fillStyle = theme.ob;
   for(const o of obstacles){
     if(o.hang){
@@ -542,7 +593,6 @@ function draw(){
     }
   }
 
-  // coins with glow + spin shimmer
   for(const c of coins){
     if(c.collected) continue;
     ctx.save();
@@ -567,47 +617,51 @@ function draw(){
     ctx.restore();
   }
 
-  // player sprite: rounded body + visor, leans forward slightly, duck squashes it
-  const ph = player.ducking ? 12 : player.h;
-  const px = player.x, py = player.y - ph;
+  drawFinishLine();
+}
+
+function drawPlayer(){
+  const h = player.ducking ? DUCK_H : player.h;
+  const px = player.x, py = player.y - h;
+
   ctx.save();
-  if(player.hasShield){
-    ctx.shadowColor = '#4cc9f0'; ctx.shadowBlur = 14;
-  }
+  if(player.hasShield){ ctx.shadowColor = '#4cc9f0'; ctx.shadowBlur = 14; }
   ctx.fillStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
   const r = 6;
   ctx.beginPath();
   ctx.moveTo(px+r, py);
-  ctx.arcTo(px+player.w, py, px+player.w, py+ph, r);
-  ctx.arcTo(px+player.w, py+ph, px, py+ph, r);
-  ctx.arcTo(px, py+ph, px, py, r);
+  ctx.arcTo(px+player.w, py, px+player.w, py+h, r);
+  ctx.arcTo(px+player.w, py+h, px, py+h, r);
+  ctx.arcTo(px, py+h, px, py, r);
   ctx.arcTo(px, py, px+player.w, py, r);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
-  // visor
-  ctx.fillStyle = 'rgba(10,10,20,0.6)';
-  ctx.fillRect(px+player.w*0.45, py+ph*0.2, player.w*0.5, ph*0.3);
 
-  // animated running legs (only when grounded and not ducking)
+  ctx.fillStyle = 'rgba(10,10,20,0.6)';
+  ctx.fillRect(px+player.w*0.45, py+h*0.2, player.w*0.5, h*0.3);
+
   if(player.onGround && !player.ducking){
     const legPhase = Math.sin(frame*0.5);
     ctx.strokeStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(px+6, py+ph);
-    ctx.lineTo(px+6+legPhase*5, py+ph+7);
-    ctx.moveTo(px+player.w-6, py+ph);
-    ctx.lineTo(px+player.w-6-legPhase*5, py+ph+7);
+    ctx.moveTo(px+6, py+h); ctx.lineTo(px+6+legPhase*5, py+h+7);
+    ctx.moveTo(px+player.w-6, py+h); ctx.lineTo(px+player.w-6-legPhase*5, py+h+7);
     ctx.stroke();
   }
   if(player.hasShield){
     ctx.strokeStyle = 'rgba(76,201,240,0.6)';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(px+player.w/2, py+ph/2, Math.max(player.w,ph)*0.9, 0, Math.PI*2);
+    ctx.arc(px+player.w/2, py+h/2, Math.max(player.w,h)*0.9, 0, Math.PI*2);
     ctx.stroke();
   }
+}
+
+function drawHud(theme){
+  ctx.fillStyle = '#222'; ctx.fillRect(10, 10, 100, 6);
+  ctx.fillStyle = '#06d6a0'; ctx.fillRect(10, 10, Math.min(100, 100*distance/LEVEL_LENGTH), 6);
 
   ctx.font = '14px monospace'; ctx.fillStyle = '#ffd166';
   for(const p of popups){ ctx.globalAlpha = Math.max(p.life/40,0); ctx.fillText(p.text, p.x, p.y); }
@@ -615,46 +669,49 @@ function draw(){
 
   ctx.font = '12px monospace'; ctx.fillStyle = '#888';
   ctx.fillText(theme.name, 10, 30);
-  if(multiplier > 1){ ctx.fillStyle='#ffd166'; ctx.fillText('x'+multiplier, canvas.width-30, 30); }
+  if(multiplier > 1){ ctx.fillStyle = '#ffd166'; ctx.fillText('x'+multiplier, canvas.width-30, 30); }
+}
 
-  // cinematic vignette
+function drawVignette(){
   const vg = ctx.createRadialGradient(canvas.width/2,canvas.height/2,120,canvas.width/2,canvas.height/2,320);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
   vg.addColorStop(1, 'rgba(0,0,0,0.45)');
   ctx.fillStyle = vg;
   ctx.fillRect(0,0,canvas.width,canvas.height);
+}
 
+function drawOverlay(){
+  const dim = (a) => { ctx.fillStyle = `rgba(0,0,0,${a})`; ctx.fillRect(0,0,canvas.width,canvas.height); };
   if(state === 'paused'){
-    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    centerText([{ text:'PAUSED', font:'bold 28px monospace', color:'#ffd166' },{ text:'press P to resume', font:'14px monospace' }], 140, 30);
-  }
-  if(state === 'dead'){
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    dim(0.5);
+    centerText([
+      { text:'PAUSED', font:'bold 28px monospace', color:'#ffd166' },
+      { text:'press ESC to resume', font:'14px monospace' },
+    ], 140, 30);
+  } else if(state === 'dead'){
+    dim(0.6);
     centerText([
       { text:'HIT!', font:'bold 28px monospace', color:'#ef476f' },
       { text:'lives left: '+lives, font:'14px monospace' },
       { text:'press SPACE to retry level', font:'14px monospace', color:'#ffd166' },
     ], 130, 30);
-  }
-  if(state === 'levelclear'){
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  } else if(state === 'levelclear'){
+    dim(0.6);
     centerText([
       { text:'LEVEL '+level+' CLEAR', font:'bold 24px monospace', color:'#06d6a0' },
       { text:'score: '+Math.floor(score/5), font:'14px monospace' },
       { text:'press SPACE for level '+(level+1), font:'14px monospace', color:'#ffd166' },
     ], 130, 30);
-  }
-  if(state === 'victory'){
-    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  } else if(state === 'victory'){
+    dim(0.65);
     centerText([
       { text:'YOU WIN', font:'bold 30px monospace', color:'#06d6a0' },
       { text:'final score: '+Math.floor(score/5), font:'16px monospace' },
       { text:'best: '+Math.floor(best/5), font:'14px monospace', color:'#ffd166' },
       { text:'press SPACE to play again', font:'14px monospace', color:'#888' },
     ], 120, 32);
-  }
-  if(state === 'gameover'){
-    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  } else if(state === 'gameover'){
+    dim(0.65);
     centerText([
       { text:'GAME OVER', font:'bold 30px monospace', color:'#ef476f' },
       { text:'score: '+Math.floor(score/5), font:'16px monospace' },
@@ -664,6 +721,29 @@ function draw(){
   }
 }
 
+function draw(){
+  const theme = LEVEL_THEMES[level-1] || LEVEL_THEMES[0];
+
+  if(state === 'title'){
+    drawBackground(theme);
+    centerText([
+      { text:'ECHO', font:'bold 44px monospace', color:'#06d6a0' },
+      { text:'race against your own ghost', font:'14px monospace' },
+      { text: LEVEL_THEMES.length+' levels · sync multiplier · duck + jump · 3 lives', font:'12px monospace', color:'#888' },
+      { text:'press SPACE to start', font:'16px monospace', color:'#ffd166' },
+    ], 110, 34);
+    return;
+  }
+
+  drawBackground(theme);
+  drawEntities(theme);
+  drawPlayer();
+  drawHud(theme);
+  drawVignette();
+  drawOverlay();
+}
+
+// ------------------------------------------------------------------ LOOP
 function loop(){
   if(state === 'playing') update();
   draw();

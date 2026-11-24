@@ -7,6 +7,12 @@
 <meta name="theme-color" content="#0d0d14">
 <meta name="author" content="SYP">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2315151f'/%3E%3Crect x='28' y='28' width='44' height='44' rx='10' fill='%2306d6a0'/%3E%3C/svg%3E">
+<meta property="og:title" content="ECHO — race your own ghost">
+<meta property="og:description" content="A free browser runner where you race across dust, gravity, and the stars against a recorded ghost of your own last attempt.">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="ECHO — race your own ghost">
+<meta name="twitter:description" content="A free browser runner where you race against a recorded ghost of your own last attempt.">
 <title>ECHO — race your own ghost</title>
 <style>
   :root{
@@ -269,13 +275,24 @@ function renderPowerupBadges(){
 }
 
 // --------------------------------------------------------- PERSISTENCE
-let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10);
+// wrapped in try/catch: some browsers (private/incognito mode, locked-down
+// embedded webviews) throw on localStorage access entirely - the game must
+// still run fine, it just won't remember a best score across visits
+function readBestScore(){
+  try{ return parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0; }
+  catch(e){ return 0; }
+}
+function writeBestScore(value){
+  try{ localStorage.setItem(BEST_KEY, value); } catch(e){ /* storage unavailable - ignore */ }
+}
+
+let best = readBestScore();
 bestEl.textContent = Math.floor(best/5);
 
 function saveBestIfRecord(){
   if(score > best){
     best = score;
-    localStorage.setItem(BEST_KEY, best);
+    writeBestScore(best);
     bestEl.textContent = Math.floor(best/5);
   }
 }
@@ -641,6 +658,15 @@ pauseBtn.addEventListener('click', ()=>{
   if(state === 'playing' || state === 'paused'){
     state = state === 'playing' ? 'paused' : 'playing';
   }
+});
+
+// auto-pause when the tab/window loses focus, so switching away mid-run
+// never costs a life or desyncs the ghost recording while you're not looking
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden && state === 'playing') state = 'paused';
+});
+window.addEventListener('blur', ()=>{
+  if(state === 'playing') state = 'paused';
 });
 
 // tapping the canvas on any non-playing screen (title/dead/clear/etc) advances it

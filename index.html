@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ECHO</title>
+<style>
+  html,body{margin:0;background:#0d0d14;overflow:hidden;height:100%;display:flex;align-items:center;justify-content:center;font-family:monospace;color:#eee}
+  canvas{background:#15151f;border:2px solid #444}
+  #hud{position:fixed;top:10px;left:10px;font-size:18px}
+  #msg{position:fixed;top:40%;width:100%;text-align:center;font-size:28px;color:#ffd166;display:none}
+  #combo{position:fixed;top:10px;right:10px;font-size:18px;color:#ffd166}
+</style>
+</head>
+<body>
+<div id="hud">Score: <span id="score">0</span> | Run: <span id="run">1</span></div>
+<div id="combo">Multiplier: x<span id="mult">1</span></div>
+<div id="msg">GAME OVER - press SPACE to run again</div>
+<canvas id="c" width="480" height="320"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const runEl = document.getElementById('run');
+const msgEl = document.getElementById('msg');
+const multEl = document.getElementById('mult');
+
+const GROUND_Y = 260;
+const GRAVITY = 0.6;
+const JUMP_V = -11;
+
+let runCount = 1;
+let score = 0;
+let gameOver = false;
+let multiplier = 1;
+let syncCooldown = 0;
+let popups = [];
+let started = false;
+
+// --- tiny synthesized sound engine (no files, fully free/offline) ---
+let audioCtx = null;
+function sfx(freq, dur, type='square', vol=0.08){
+  try{
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.value = vol;
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+    osc.stop(audioCtx.currentTime + dur);
+  } catch(e){}
+}
+function sfxJump(){ sfx(440, 0.12, 'square'); }
+function sfxCoin(){ sfx(880, 0.08, 'triangle'); setTimeout(()=>sfx(1320,0.08,'triangle'), 40); }
+function sfxSync(){ sfx(660,0.1,'sawtooth'); setTimeout(()=>sfx(990,0.15,'sawtooth'),60); }
+function sfxDie(){ sfx(160,0.3,'sawtooth',0.1); }
+
+// current player
+let player = { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true };
+
+// obstacles: fixed pattern so runs are comparable
+function makeObstacles(){
+  let obs = [];
+  for(let i=0;i<10;i++){
+    obs.push({ x: 500 + i*260 + Math.random()*60, w: 20, h: 20 + Math.random()*20 });
+  }
+  return obs;
+}
+function makeCoins(){
+  let coins = [];
+  for(let i=0;i<14;i++){
+    coins.push({ x: 450 + i*190 + Math.random()*40, y: GROUND_Y - 50 - Math.random()*40, r: 6, collected: false });
+  }
+  return coins;
+}
+let obstacles = makeObstacles();
+let coins = makeCoins();
+
+let worldSpeed = 4;
+let distance = 0;
+
+// recording this run's input events (frame, jumped)
+let inputLog = [];
+let frame = 0;
+
+// previous run's ghost playback
+let ghostLog = [];
+let ghostPlayer = null;
+let ghostIdx = 0;
+
+function resetRun(keepGhost){
+  if(keepGhost) { ghostLog = inputLog.slice(); }
+  inputLog = [];
+  frame = 0;
+  distance = 0;
+  score = 0;
+  player = { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true };
+  obstacles = makeObstacles();
+  coins = makeCoins();
+  multiplier = 1;
+  syncCooldown = 0;
+  popups = [];
+  if(ghostLog.length){
+    ghostPlayer = { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true };
+    ghostIdx = 0;
+  } else {
+    ghostPlayer = null;
+  }
+  gameOver = false;
+  msgEl.style.display = 'none';
+}
+
+function jump(p){
+  if(p.onGround){
+    p.vy = JUMP_V;
+    p.onGround = false;
+  }
+}
+
+window.addEventListener('keydown', (e)=>{
+  if(e.code === 'Space'){
+    e.preventDefault();
+    if(!started){
+      started = true;
+      msgEl.style.display = 'none';
+      return;
+    }
+    if(gameOver){
+      runCount++;
+      runEl.textContent = runCount;
+      resetRun(true);
+    } else {
+      inputLog.push(frame);
+      jump(player);
+      sfxJump();
+    }
+  }
+});
+
+function physics(p){
+  p.vy += GRAVITY;
+  p.y += p.vy;
+  if(p.y >= GROUND_Y){ p.y = GROUND_Y; p.vy = 0; p.onGround = true; }
+}
+
+function rectsOverlap(a,b){
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+
+function loop(){
+  if(!started){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = '#06d6a0';
+    ctx.font = 'bold 42px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('ECHO', canvas.width/2, 120);
+    ctx.fillStyle = '#eee';
+    ctx.font = '16px monospace';
+    ctx.fillText('race against your own ghost', canvas.width/2, 155);
+    ctx.fillStyle = '#ffd166';
+    ctx.font = '16px monospace';
+    ctx.fillText('press SPACE to start', canvas.width/2, 210);
+    ctx.textAlign = 'left';
+    requestAnimationFrame(loop);
+    return;
+  }
+  if(!gameOver){
+    frame++;
+    distance += worldSpeed;
+    score += 1 * multiplier;
+    scoreEl.textContent = Math.floor(score/5);
+    multEl.textContent = multiplier;
+
+    physics(player);
+
+    // ghost playback: jump if its recorded frame matches
+    if(ghostPlayer){
+      if(ghostIdx < ghostLog.length && ghostLog[ghostIdx] === frame){
+        jump(ghostPlayer);
+        ghostIdx++;
+      }
+      physics(ghostPlayer);
+
+      // GHOST SYNC: both airborne and close together = multiplier bonus
+      if(syncCooldown > 0) syncCooldown--;
+      const bothAirborne = !player.onGround && !ghostPlayer.onGround;
+      const closeTogether = Math.abs(player.y - ghostPlayer.y) < 18;
+      if(bothAirborne && closeTogether && syncCooldown === 0){
+        multiplier = Math.min(multiplier + 1, 5);
+        syncCooldown = 60;
+        popups.push({ x: player.x, y: player.y - 50, text: 'SYNC! x'+multiplier, life: 40 });
+        sfxSync();
+      }
+    } else {
+      multiplier = 1;
+    }
+
+    // move obstacles + coins
+    for(const o of obstacles) o.x -= worldSpeed;
+    for(const c of coins) c.x -= worldSpeed;
+
+    // collisions with obstacles
+    const playerBox = { x: player.x, y: player.y - player.h, w: player.w, h: player.h };
+    for(const o of obstacles){
+      const obox = { x: o.x, y: GROUND_Y - o.h, w: o.w, h: o.h };
+      if(rectsOverlap(playerBox, obox) && !gameOver){
+        gameOver = true;
+        msgEl.style.display = 'block';
+        sfxDie();
+      }
+    }
+
+    // coin pickups
+    for(const c of coins){
+      if(c.collected) continue;
+      const dx = (player.x+player.w/2) - c.x;
+      const dy = (player.y-player.h/2) - c.y;
+      if(Math.sqrt(dx*dx+dy*dy) < 16){
+        c.collected = true;
+        score += 20 * multiplier;
+        popups.push({ x: c.x, y: c.y, text: '+'+(20*multiplier), life: 30 });
+        sfxCoin();
+      }
+    }
+
+    // age out popups
+    popups = popups.filter(p => (p.life-- > 0));
+  }
+
+  // draw
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(0, GROUND_Y+24, canvas.width, 4);
+
+  // ghost (translucent)
+  if(ghostPlayer){
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(ghostPlayer.x, ghostPlayer.y - ghostPlayer.h, ghostPlayer.w, ghostPlayer.h);
+  }
+
+  // obstacles
+  ctx.fillStyle = '#ef476f';
+  for(const o of obstacles){
+    ctx.fillRect(o.x, GROUND_Y - o.h, o.w, o.h);
+  }
+
+  // coins
+  ctx.fillStyle = '#ffd166';
+  for(const c of coins){
+    if(c.collected) continue;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.r, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // player
+  ctx.fillStyle = '#06d6a0';
+  ctx.fillRect(player.x, player.y - player.h, player.w, player.h);
+
+  // popups
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#ffd166';
+  for(const p of popups){
+    ctx.globalAlpha = Math.max(p.life/40, 0);
+    ctx.fillText(p.text, p.x, p.y);
+  }
+  ctx.globalAlpha = 1;
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>

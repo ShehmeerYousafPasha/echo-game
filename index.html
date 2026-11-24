@@ -237,8 +237,15 @@
 // =========================================================================
 
 // ---------------------------------------------------------------- CONSTANTS
-const LOGICAL_W = 480, LOGICAL_H = 320; // design-space resolution; all game math uses this
-const GROUND_Y = 260;
+// On mobile, "zoom" the camera in by shrinking the logical (design-space)
+// resolution while keeping the exact same 3:2 aspect ratio and the same
+// physical screen size. The same screen now shows less of the world, so the
+// player, obstacles, coins, etc. all render visibly bigger - desktop/large
+// screens are completely untouched (ZOOM stays 1).
+const IS_MOBILE_VIEWPORT = window.matchMedia('(max-width: 560px)').matches;
+const ZOOM = IS_MOBILE_VIEWPORT ? 0.78 : 1;
+const LOGICAL_W = Math.round(480 * ZOOM), LOGICAL_H = Math.round(320 * ZOOM); // design-space resolution; all game math uses this
+const GROUND_Y = Math.round(LOGICAL_H * (260 / 320)); // keeps the ground at the same relative height as the 480x320 original
 const GRAVITY = 0.6;
 const FALL_GRAVITY_MULT = 1.5;   // fall faster than you rise -> snappier jumps
 const JUMP_V = -11;
@@ -461,7 +468,7 @@ let obstacles, coins, powerups, popups, particles;
 let inputLog, duckLog, ghostLog, ghostDuckLog, ghostIdx, ghostDuckIdx;
 
 const stars = Array.from({length:60}, () => ({
-  x: Math.random()*480, y: Math.random()*220, s: Math.random()*1.5+0.5
+  x: Math.random()*LOGICAL_W, y: Math.random()*GROUND_Y, s: Math.random()*1.5+0.5
 }));
 const hills = Array.from({length:6}, (_, i) => ({
   x: i*160, w: 140+Math.random()*60, h: 40+Math.random()*50
@@ -1097,7 +1104,7 @@ function drawHud(theme){
 }
 
 function drawVignette(){
-  const vg = ctx.createRadialGradient(LOGICAL_W/2,LOGICAL_H/2,120,LOGICAL_W/2,LOGICAL_H/2,320);
+  const vg = ctx.createRadialGradient(LOGICAL_W/2,LOGICAL_H/2,120*ZOOM,LOGICAL_W/2,LOGICAL_H/2,320*ZOOM);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
   vg.addColorStop(1, 'rgba(0,0,0,0.45)');
   ctx.fillStyle = vg;

@@ -390,48 +390,13 @@ function startAmbient(){
   lfo.connect(lfoGain); lfoGain.connect(master.gain);
   lfo.start();
 
-  // a sparse, repeating piano-like motif on top of the pad - original
-  // minimalist writing in the same spirit as slow, emotional piano-and-organ
-  // film cues (simple repeating phrase, one note added at a time), not a
-  // transcription of any specific piece
-  const motifGain = ac.createGain();
-  motifGain.gain.value = 0;
-  motifGain.connect(master);
-  motifGain.gain.linearRampToValueAtTime(0.14, ac.currentTime + 6); // fades in slowly, after the pad settles
-
-  function pluck(freq, time, dur=1.6){
-    const osc = ac.createOscillator();
-    const g = ac.createGain();
-    osc.type = 'triangle';
-    osc.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, time);
-    g.gain.linearRampToValueAtTime(1, time + 0.02);       // soft attack, like a felt hammer
-    g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
-    osc.connect(g); g.connect(motifGain);
-    osc.start(time);
-    osc.stop(time + dur + 0.1);
-  }
-
-  // a short, slowly-unfolding phrase that repeats and very gradually layers
-  // (silence where a note is 0, so the phrase breathes instead of running together)
-  const NOTE = { A3:220.00, C4:261.63, E4:329.63, G4:392.00, A4:440.00 };
-  const phrase = [NOTE.A3, 0, NOTE.E4, 0, NOTE.C4, 0, NOTE.A4, 0, NOTE.G4, 0, NOTE.E4, 0, 0, 0];
-  const beat = 1.1; // seconds per step - slow and spacious
-  let motifStep = 0;
-  const motifTimer = setInterval(()=>{
-    const freq = phrase[motifStep % phrase.length];
-    if(freq) pluck(freq, ac.currentTime + 0.02);
-    motifStep++;
-  }, beat * 1000);
-
-  ambient = { master, oscs: [...oscs, highOsc], lfos: [lfo, highLfo], motifGain, motifTimer };
+  ambient = { master, oscs: [...oscs, highOsc], lfos: [lfo, highLfo] };
 }
 function stopAmbient(){
   if(!ambient) return;
   const ac = ensureAudio();
   const t = ac.currentTime;
   try{
-    clearInterval(ambient.motifTimer);
     ambient.master.gain.cancelScheduledValues(t);
     ambient.master.gain.setValueAtTime(ambient.master.gain.value, t);
     ambient.master.gain.linearRampToValueAtTime(0, t+0.8);

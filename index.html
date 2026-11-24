@@ -130,14 +130,14 @@
 
     <div id="controlsBar">
       <div id="hint">
-        <b>Up/Space</b> jump &middot; <b>Down</b> duck &middot; <b>Esc</b> pause &middot; cyan=shield pink=double-jump
+        <b>&uarr; / Space</b> jump &middot; <b>&darr;</b> duck &middot; <b>Esc</b> pause &middot; cyan = shield, pink = double jump
       </div>
       <button class="iconbtn" id="pauseBtn">Pause</button>
     </div>
 
     <div id="touchControls">
-      <button id="duckBtn">DUCK</button>
-      <button id="jumpBtn">JUMP</button>
+      <button id="duckBtn">DUCK &darr;</button>
+      <button id="jumpBtn">JUMP &uarr;</button>
     </div>
   </div>
 
@@ -391,7 +391,7 @@ function makeCoins(){
   while(x < SPAWN_LIMIT){
     x += 170 + Math.random()*60;
     if(x >= SPAWN_LIMIT) break;
-    list.push({ x, y: GROUND_Y-50-Math.random()*40, r:6, collected:false });
+    list.push({ x, y: GROUND_Y-50-Math.random()*40, r:6, collected:false, phase: Math.random()*Math.PI*2 });
   }
   return list;
 }
@@ -597,7 +597,7 @@ function updateGhost(){
   if(bothAirborne && closeTogether && syncCooldown === 0){
     multiplier = Math.min(multiplier + 1, MAX_MULTIPLIER);
     syncCooldown = SYNC_COOLDOWN;
-    popups.push({ x: player.x, y: player.y-50, text: 'SYNC x'+multiplier, life: 40 });
+    popups.push({ x: player.x, y: player.y-50, text: 'SYNC ×'+multiplier, life: 40 });
     sfxSync();
   }
 }
@@ -830,9 +830,9 @@ function drawEntities(theme){
   for(const c of coins){
     if(c.collected) continue;
     ctx.save();
-    ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 4;
+    ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 3;
     ctx.fillStyle = '#ffd166';
-    const squish = Math.abs(Math.sin(frame*0.1 + c.x));
+    const squish = 0.75 + 0.25*Math.sin(frame*0.08 + c.phase);
     ctx.beginPath();
     ctx.ellipse(c.x, c.y, c.r*squish+2, c.r, 0, 0, Math.PI*2);
     ctx.fill();
@@ -908,7 +908,7 @@ function drawHud(theme){
 
   ctx.font = '12px monospace'; ctx.fillStyle = '#888';
   ctx.fillText(theme.name, 10, 30);
-  if(multiplier > 1){ ctx.fillStyle = '#ffd166'; ctx.fillText('x'+multiplier, LOGICAL_W-30, 30); }
+  if(multiplier > 1){ ctx.fillStyle = '#ffd166'; ctx.fillText('×'+multiplier, LOGICAL_W-30, 30); }
 }
 
 function drawVignette(){
@@ -924,38 +924,38 @@ function drawOverlay(){
   if(state === 'paused'){
     dim(0.5);
     centerText([
-      { text:'PAUSED', font:'bold 28px monospace', color:'#ffd166' },
-      { text:'press ESC to resume', font:'14px monospace' },
+      { text:'Paused', font:'bold 28px monospace', color:'#ffd166' },
+      { text:'Press Esc to resume.', font:'14px monospace' },
     ], 140, 30);
   } else if(state === 'dead'){
     dim(0.6);
     centerText([
-      { text:'HIT!', font:'bold 28px monospace', color:'#ef476f' },
-      { text:'lives left: '+lives, font:'14px monospace' },
-      { text:'press SPACE to retry level', font:'14px monospace', color:'#ffd166' },
+      { text:'Hit!', font:'bold 28px monospace', color:'#ef476f' },
+      { text:'Lives left: '+lives+'.', font:'14px monospace' },
+      { text:'Press Space (or ↑) to retry the level.', font:'14px monospace', color:'#ffd166' },
     ], 130, 30);
   } else if(state === 'levelclear'){
     dim(0.6);
     centerText([
-      { text:'LEVEL '+level+' CLEAR', font:'bold 24px monospace', color:'#06d6a0' },
-      { text:'score: '+Math.floor(score/5), font:'14px monospace' },
-      { text:'press SPACE for level '+(level+1), font:'14px monospace', color:'#ffd166' },
+      { text:'Level '+level+' clear!', font:'bold 24px monospace', color:'#06d6a0' },
+      { text:'Score: '+Math.floor(score/5)+'.', font:'14px monospace' },
+      { text:'Press Space (or ↑) for level '+(level+1)+'.', font:'14px monospace', color:'#ffd166' },
     ], 130, 30);
   } else if(state === 'victory'){
     dim(0.65);
     centerText([
-      { text:'YOU WIN', font:'bold 30px monospace', color:'#06d6a0' },
-      { text:'final score: '+Math.floor(score/5), font:'16px monospace' },
-      { text:'best: '+Math.floor(best/5), font:'14px monospace', color:'#ffd166' },
-      { text:'press SPACE to play again', font:'14px monospace', color:'#888' },
+      { text:'You win!', font:'bold 30px monospace', color:'#06d6a0' },
+      { text:'Final score: '+Math.floor(score/5)+'.', font:'16px monospace' },
+      { text:'Best: '+Math.floor(best/5)+'.', font:'14px monospace', color:'#ffd166' },
+      { text:'Press Space (or ↑) to play again.', font:'14px monospace', color:'#888' },
     ], 120, 32);
   } else if(state === 'gameover'){
     dim(0.65);
     centerText([
-      { text:'GAME OVER', font:'bold 30px monospace', color:'#ef476f' },
-      { text:'score: '+Math.floor(score/5), font:'16px monospace' },
-      { text:'best: '+Math.floor(best/5), font:'14px monospace', color:'#ffd166' },
-      { text:'press SPACE to try again', font:'14px monospace', color:'#888' },
+      { text:'Game over.', font:'bold 30px monospace', color:'#ef476f' },
+      { text:'Score: '+Math.floor(score/5)+'.', font:'16px monospace' },
+      { text:'Best: '+Math.floor(best/5)+'.', font:'14px monospace', color:'#ffd166' },
+      { text:'Press Space (or ↑) to try again.', font:'14px monospace', color:'#888' },
     ], 120, 32);
   }
 }
@@ -967,9 +967,9 @@ function draw(){
     drawBackground(theme);
     centerText([
       { text:'ECHO', font:'bold 44px monospace', color:'#06d6a0' },
-      { text:'a journey through dust, gravity and your own echo', font:'13px monospace' },
-      { text: LEVEL_THEMES.length+' levels: dustbowl to singularity · sync multiplier · 3 lives', font:'11px monospace', color:'#888' },
-      { text:'press SPACE to start', font:'16px monospace', color:'#ffd166' },
+      { text:'A journey through dust, gravity, and your own echo.', font:'13px monospace' },
+      { text: LEVEL_THEMES.length+' levels: Dustbowl to Singularity · sync multiplier · 3 lives.', font:'11px monospace', color:'#888' },
+      { text:'Press Space (or ↑) to start.', font:'16px monospace', color:'#ffd166' },
     ], 110, 34);
     return;
   }

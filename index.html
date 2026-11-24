@@ -16,12 +16,48 @@
   }
   *{box-sizing:border-box}
   html,body{
-    margin:0; min-height:100%;
-    background:radial-gradient(circle at 50% 0%, #1b1b2e 0%, var(--bg-deep) 70%);
+    margin:0; min-height:100%; overflow-x:hidden;
+    background:#07070c;
     color:var(--text); font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
     display:flex; align-items:center; justify-content:center; padding:18px;
+    position:relative;
   }
-  #app{ display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; max-width:520px; }
+
+  /* full-viewport cosmic backdrop behind the game panel - pure CSS, no JS cost */
+  #bgfx{
+    position:fixed; inset:0; z-index:0; overflow:hidden; pointer-events:none;
+    background:radial-gradient(circle at 50% -10%, #241a3a 0%, #07070c 55%, #020203 100%);
+  }
+  #bgfx .nebula{
+    position:absolute; border-radius:50%; filter:blur(60px); opacity:0.35;
+    animation: drift 40s ease-in-out infinite alternate;
+  }
+  #bgfx .n1{ width:420px; height:420px; background:#4a2e6a; top:-120px; left:-100px; animation-duration:46s; }
+  #bgfx .n2{ width:360px; height:360px; background:#1c3a5e; bottom:-140px; right:-80px; animation-duration:55s; animation-direction:alternate-reverse; }
+  #bgfx .n3{ width:300px; height:300px; background:#6a2e4a; top:30%; right:-120px; animation-duration:38s; }
+  @keyframes drift{
+    0%{ transform:translate(0,0) scale(1); }
+    100%{ transform:translate(40px,-30px) scale(1.15); }
+  }
+  #bgfx .starfield{
+    position:absolute; inset:0;
+    background-image:
+      radial-gradient(1.5px 1.5px at 20% 30%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 70% 60%, #fff, transparent),
+      radial-gradient(1px 1px at 40% 80%, #fff, transparent),
+      radial-gradient(1px 1px at 85% 15%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 55% 40%, #fff, transparent),
+      radial-gradient(1px 1px at 10% 65%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 95% 85%, #fff, transparent),
+      radial-gradient(1px 1px at 30% 10%, #fff, transparent),
+      radial-gradient(1px 1px at 65% 92%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 5% 90%, #fff, transparent);
+    background-repeat:repeat; background-size:340px 340px;
+    opacity:0.5; animation: twinkle 6s ease-in-out infinite alternate;
+  }
+  @keyframes twinkle{ 0%{opacity:0.35} 100%{opacity:0.65} }
+
+  #app{ position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; max-width:520px; }
 
   header{ text-align:center; }
   header h1{
@@ -95,6 +131,12 @@
 </style>
 </head>
 <body>
+<div id="bgfx">
+  <div class="nebula n1"></div>
+  <div class="nebula n2"></div>
+  <div class="nebula n3"></div>
+  <div class="starfield"></div>
+</div>
 <div id="app">
   <header>
     <h1>ECHO</h1>

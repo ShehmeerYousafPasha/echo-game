@@ -23,7 +23,7 @@
     <div>BEST <span id="best">0</span></div>
   </div>
   <canvas id="c" width="480" height="320"></canvas>
-  <div id="hint">SPACE jump &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; P pause &nbsp;|&nbsp; sync with your ghost mid-air for a multiplier</div>
+  <div id="hint">SPACE jump &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; P pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -57,11 +57,72 @@ function sfx(freq, dur, type='square', vol=0.08){
     osc.stop(audioCtx.currentTime + dur);
   } catch(e){}
 }
-const sfxJump = ()=>sfx(440,0.12,'square');
+// clock "tick" motif (Interstellar-style) instead of a plain beep
+function sfxTick(pitchMul=1){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 1800 * pitchMul;
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.09, t+0.002);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t+0.045);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t); osc.stop(t+0.05);
+}
+const sfxJump = ()=>sfxTick(1);
+const sfxDoubleJump = ()=>sfxTick(1.5);
 const sfxCoin = ()=>{ sfx(880,0.08,'triangle'); setTimeout(()=>sfx(1320,0.08,'triangle'),40); };
 const sfxSync = ()=>{ sfx(660,0.1,'sawtooth'); setTimeout(()=>sfx(990,0.15,'sawtooth'),60); };
 const sfxHit  = ()=>sfx(160,0.25,'sawtooth',0.1);
+const sfxShield = ()=>{ sfx(300,0.15,'sine',0.08); setTimeout(()=>sfx(450,0.15,'sine',0.08),80); };
 const sfxWin  = ()=>{ [523,659,784,1047].forEach((f,i)=>setTimeout(()=>sfx(f,0.2,'triangle',0.09), i*110)); };
+
+// --- ambient Interstellar-style organ drone (two detuned low oscillators + slow swell) ---
+let ambient = null;
+function startAmbient(){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  stopAmbient();
+  const master = audioCtx.createGain();
+  master.gain.value = 0;
+  master.connect(audioCtx.destination);
+  master.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 2);
+
+  const freqs = [55, 55*1.5, 55*2];
+  const oscs = freqs.map((f, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = f;
+    osc.detune.value = (i-1) * 4;
+    const g = audioCtx.createGain();
+    g.gain.value = i === 0 ? 1 : 0.4;
+    osc.connect(g); g.connect(master);
+    osc.start();
+    return osc;
+  });
+
+  // slow swell LFO on master gain for that "breathing" organ feel
+  const lfo = audioCtx.createOscillator();
+  lfo.frequency.value = 0.08;
+  const lfoGain = audioCtx.createGain();
+  lfoGain.gain.value = 0.015;
+  lfo.connect(lfoGain); lfoGain.connect(master.gain);
+  lfo.start();
+
+  ambient = { master, oscs, lfo };
+}
+function stopAmbient(){
+  if(!ambient) return;
+  const t = audioCtx.currentTime;
+  try{
+    ambient.master.gain.cancelScheduledValues(t);
+    ambient.master.gain.setValueAtTime(ambient.master.gain.value, t);
+    ambient.master.gain.linearRampToValueAtTime(0, t+0.8);
+    setTimeout(()=>{ ambient.oscs.forEach(o=>o.stop()); ambient.lfo.stop(); }, 850);
+  } catch(e){}
+  ambient = null;
+}
 
 // ---- game state machine ----
 // states: 'title' | 'playing' | 'paused' | 'dead' | 'levelclear' | 'victory' | 'gameover'
@@ -76,7 +137,7 @@ let frame = 0;
 let distance = 0;
 let worldSpeed = 4;
 
-let player, obstacles, coins;
+let player, obstacles, coins, powerups;
 let inputLog = [], ghostLog = [], ghostPlayer = null, ghostIdx = 0, ghostDuckIdx = 0;
 let duckLog = [], ghostDuckLog = [];
 
@@ -125,8 +186,18 @@ function makeCoins(theme){
   }
   return coins;
 }
+function makePowerups(theme){
+  let pu = [];
+  let x = 700;
+  while(x < LEVEL_LENGTH){
+    x += 500 + Math.random()*400;
+    const type = Math.random() < 0.5 ? 'shield' : 'jump2';
+    pu.push({ x, y: GROUND_Y - 60, r: 9, collected: false, type });
+  }
+  return pu;
+}
 
-function newPlayer(){ return { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true, ducking:false }; }
+function newPlayer(){ return { x: 60, y: GROUND_Y, vy: 0, w: 24, h: 24, onGround: true, ducking:false, hasShield:false, doubleJumpAvailable:false, usedDoubleJump:false }; }
 
 function startLevel(keepGhost){
   const theme = LEVEL_THEMES[level-1];
@@ -135,6 +206,7 @@ function startLevel(keepGhost){
   player = newPlayer();
   obstacles = makeObstacles(theme);
   coins = makeCoins(theme);
+  powerups = makePowerups(theme);
   multiplier = 1; syncCooldown = 0; popups = [];
   if(keepGhost && inputLog.length){ ghostLog = inputLog.slice(); ghostDuckLog = duckLog.slice(); }
   inputLog = []; duckLog = [];
@@ -150,9 +222,19 @@ function startGame(){
   levelEl.textContent = level;
   scoreEl.textContent = score;
   startLevel(false);
+  startAmbient();
 }
 
-function jump(p){ if(p.onGround){ p.vy = JUMP_V; p.onGround = false; } }
+function jump(p){
+  if(p.onGround){
+    p.vy = JUMP_V; p.onGround = false; p.usedDoubleJump = false;
+    return 'ground';
+  } else if(p.doubleJumpAvailable && !p.usedDoubleJump){
+    p.vy = JUMP_V * 0.85; p.usedDoubleJump = true;
+    return 'double';
+  }
+  return null;
+}
 function physics(p){ p.vy += GRAVITY; p.y += p.vy; if(p.y >= GROUND_Y){ p.y = GROUND_Y; p.vy = 0; p.onGround = true; } }
 function rectsOverlap(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
 
@@ -177,8 +259,9 @@ window.addEventListener('keydown', (e)=>{
   if(state === 'victory' || state === 'gameover'){ startGame(); return; }
   if(state === 'playing'){
     inputLog.push(frame);
-    jump(player);
-    sfxJump();
+    const result = jump(player);
+    if(result === 'double') sfxDoubleJump();
+    else if(result === 'ground') sfxJump();
   }
 });
 window.addEventListener('keydown', (e)=>{
@@ -202,6 +285,7 @@ function endRunLoseLife(){
   if(lives <= 0){
     if(score > best){ best = score; localStorage.setItem(BEST_KEY, best); bestEl.textContent = best; }
     state = 'gameover';
+    stopAmbient();
   } else {
     state = 'dead';
   }
@@ -212,6 +296,13 @@ function update(){
   distance += worldSpeed;
   score += 1 * multiplier;
   scoreEl.textContent = Math.floor(score/5);
+
+  // ambient ticking clock, tempo rises as the level progresses (Interstellar tension motif)
+  const progress = distance / LEVEL_LENGTH;
+  const tickInterval = Math.max(10, 36 - level*3 - progress*14);
+  if(frame % Math.round(tickInterval) === 0){
+    sfxTick(0.5 + progress*0.3);
+  }
 
   physics(player);
   if(frame % 3 === 0) spawnTrail(player);
@@ -240,14 +331,41 @@ function update(){
 
   for(const o of obstacles) o.x -= worldSpeed;
   for(const c of coins) c.x -= worldSpeed;
+  for(const pu of powerups) pu.x -= worldSpeed;
 
   const pH = player.ducking ? 12 : player.h;
   const pBox = { x: player.x, y: player.y - pH, w: player.w, h: pH };
   for(const o of obstacles){
+    if(o.passed) continue;
     const oBox = o.hang
       ? { x: o.x, y: o.y, w: o.w, h: o.h }
       : { x: o.x, y: GROUND_Y - o.h, w: o.w, h: o.h };
-    if(rectsOverlap(pBox, oBox)){ endRunLoseLife(); return; }
+    if(rectsOverlap(pBox, oBox)){
+      if(player.hasShield){
+        player.hasShield = false;
+        o.passed = true;
+        sfxShield();
+        popups.push({ x: player.x, y: player.y - 50, text: 'SHIELD BROKE', life: 30 });
+      } else {
+        endRunLoseLife(); return;
+      }
+    }
+  }
+
+  for(const pu of powerups){
+    if(pu.collected) continue;
+    const dx = (player.x+player.w/2)-pu.x, dy=(player.y-player.h/2)-pu.y;
+    if(Math.sqrt(dx*dx+dy*dy) < 18){
+      pu.collected = true;
+      if(pu.type === 'shield'){
+        player.hasShield = true;
+        popups.push({ x: pu.x, y: pu.y, text: 'SHIELD UP', life: 35 });
+      } else {
+        player.doubleJumpAvailable = true;
+        popups.push({ x: pu.x, y: pu.y, text: 'DOUBLE JUMP', life: 35 });
+      }
+      sfxShield();
+    }
   }
   for(const c of coins){
     if(c.collected) continue;
@@ -266,6 +384,7 @@ function update(){
       if(score > best){ best = score; localStorage.setItem(BEST_KEY, best); bestEl.textContent = best; }
       state = 'victory';
       sfxWin();
+      stopAmbient();
     } else {
       state = 'levelclear';
       sfxWin();
@@ -337,9 +456,24 @@ function draw(){
   ctx.fillStyle = '#ffd166';
   for(const c of coins){ if(c.collected) continue; ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,Math.PI*2); ctx.fill(); }
 
+  for(const pu of powerups){
+    if(pu.collected) continue;
+    ctx.save();
+    ctx.translate(pu.x, pu.y);
+    ctx.rotate(frame*0.05);
+    ctx.fillStyle = pu.type === 'shield' ? '#4cc9f0' : '#f72585';
+    ctx.fillRect(-pu.r, -pu.r, pu.r*2, pu.r*2);
+    ctx.restore();
+  }
+
   const ph = player.ducking ? 12 : player.h;
-  ctx.fillStyle = '#06d6a0';
+  ctx.fillStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
   ctx.fillRect(player.x, player.y-ph, player.w, ph);
+  if(player.hasShield){
+    ctx.strokeStyle = '#4cc9f0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(player.x-3, player.y-ph-3, player.w+6, ph+6);
+  }
 
   ctx.font = '14px monospace'; ctx.fillStyle = '#ffd166';
   for(const p of popups){ ctx.globalAlpha = Math.max(p.life/40,0); ctx.fillText(p.text, p.x, p.y); }

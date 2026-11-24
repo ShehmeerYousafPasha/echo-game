@@ -334,11 +334,16 @@ function newPlayer(){
   };
 }
 
+// no obstacle/coin/power-up may spawn past this point, so the stretch
+// leading up to the finish line is always clear
+const SPAWN_LIMIT = LEVEL_LENGTH - 60;
+
 function makeObstacles(theme){
   const list = [];
   let x = 500;
-  while(x < LEVEL_LENGTH){
+  while(x < SPAWN_LIMIT){
     x += theme.gap + Math.random()*80;
+    if(x >= SPAWN_LIMIT) break;
     if(Math.random() < 0.3){
       list.push({ x, w:26, h:20, hang:true, y: GROUND_Y-46, passed:false });
     } else {
@@ -350,8 +355,9 @@ function makeObstacles(theme){
 function makeCoins(){
   const list = [];
   let x = 420;
-  while(x < LEVEL_LENGTH){
+  while(x < SPAWN_LIMIT){
     x += 170 + Math.random()*60;
+    if(x >= SPAWN_LIMIT) break;
     list.push({ x, y: GROUND_Y-50-Math.random()*40, r:6, collected:false });
   }
   return list;
@@ -359,8 +365,9 @@ function makeCoins(){
 function makePowerups(){
   const list = [];
   let x = 700;
-  while(x < LEVEL_LENGTH){
+  while(x < SPAWN_LIMIT){
     x += 500 + Math.random()*400;
+    if(x >= SPAWN_LIMIT) break;
     list.push({ x, y: GROUND_Y-60, r:9, collected:false, type: Math.random()<0.5 ? 'shield' : 'jump2' });
   }
   return list;
@@ -498,7 +505,7 @@ window.addEventListener('keydown', (e)=>{
     state = state === 'playing' ? 'paused' : 'playing';
     return;
   }
-  if(e.code === 'ArrowDown'){ setDuck(true); return; }
+  if(e.code === 'ArrowDown'){ e.preventDefault(); setDuck(true); return; }
   if(e.code === 'Space' || e.code === 'ArrowUp'){
     e.preventDefault();
     if(state === 'playing') tryJump();
@@ -506,8 +513,8 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 window.addEventListener('keyup', (e)=>{
-  if(e.code === 'ArrowDown'){ setDuck(false); return; }
-  if(e.code === 'Space' || e.code === 'ArrowUp') shortHop(player);
+  if(e.code === 'ArrowDown'){ e.preventDefault(); setDuck(false); return; }
+  if(e.code === 'Space' || e.code === 'ArrowUp'){ e.preventDefault(); shortHop(player); }
 });
 
 pauseBtn.addEventListener('click', ()=>{

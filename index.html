@@ -96,7 +96,7 @@
 <div id="app">
   <header>
     <h1>ECHO</h1>
-    <p>race against your own ghost</p>
+    <p>dust · gravity · your own echo</p>
   </header>
 
   <div id="panel">
@@ -166,12 +166,14 @@ const SYNC_COOLDOWN = 60;
 const MAX_MULTIPLIER = 5;
 const BEST_KEY = 'echo_best_score';
 
+// a space-and-time journey, in the emotional register of cosmic sci-fi —
+// original names/palettes, not reproductions of any specific film's assets
 const LEVEL_THEMES = [
-  { name:'MEADOW', skyTop:'#2b2d5e', skyBot:'#15151f', hill:'#1f2140', ground:'#2a2a3a', ob:'#ef476f', speed:4.0, gap:240, stars:false },
-  { name:'CANYON', skyTop:'#3a2440', skyBot:'#1a1420', hill:'#2a1a30', ground:'#3a2a3a', ob:'#f78c6b', speed:4.6, gap:215, stars:false },
-  { name:'VOID',   skyTop:'#101035', skyBot:'#0a0a16', hill:'#161638', ground:'#242450', ob:'#c77dff', speed:5.2, gap:195, stars:true  },
-  { name:'STORM',  skyTop:'#241533', skyBot:'#101018', hill:'#1c1228', ground:'#2a1f3a', ob:'#ff6b9d', speed:5.8, gap:180, stars:true  },
-  { name:'CORE',   skyTop:'#1a0a10', skyBot:'#060608', hill:'#200c10', ground:'#3a2a2a', ob:'#ffd166', speed:6.6, gap:165, stars:true  },
+  { name:'DUSTBOWL',      skyTop:'#4a3a28', skyBot:'#1a140c', hill:'#2e2416', ground:'#3a2e1c', ob:'#c9823c', speed:4.0, gap:240, stars:false, fx:'dust'      },
+  { name:'LIFTOFF',       skyTop:'#1c2b4a', skyBot:'#0a0e1a', hill:'#16203a', ground:'#232c3a', ob:'#5dade2', speed:4.6, gap:215, stars:true,  fx:'stars'     },
+  { name:'WORMHOLE',      skyTop:'#2a1a3a', skyBot:'#0a0616', hill:'#201630', ground:'#2a2050', ob:'#c77dff', speed:5.2, gap:195, stars:true,  fx:'wormhole'  },
+  { name:'EVENT HORIZON', skyTop:'#1a0f1a', skyBot:'#05030a', hill:'#1c1028', ground:'#2a1f3a', ob:'#ff6b9d', speed:5.8, gap:180, stars:true,  fx:'horizon'   },
+  { name:'SINGULARITY',   skyTop:'#120208', skyBot:'#020103', hill:'#1a0810', ground:'#3a2a2a', ob:'#ffd166', speed:6.6, gap:165, stars:true,  fx:'singularity' },
 ];
 // how far past the level length the finish line starts, so it scrolls into
 // view and reaches the player right as the level actually completes
@@ -278,28 +280,47 @@ function startAmbient(){
   const master = ac.createGain();
   master.gain.value = 0;
   master.connect(ac.destination);
-  master.gain.linearRampToValueAtTime(0.05, ac.currentTime + 2);
+  master.gain.linearRampToValueAtTime(0.055, ac.currentTime + 3);
 
-  const oscs = [55, 55*1.5, 55*2].map((freq, i) => {
+  // low organ-like pad: root + fifth + octave, each with a touch of detune
+  // for a "breathing" chorus effect (original composition, no sampled audio)
+  const padFreqs = [55, 55*1.5, 55*2, 55*3];
+  const oscs = padFreqs.map((freq, i) => {
     const osc = ac.createOscillator();
     osc.type = 'sine';
     osc.frequency.value = freq;
-    osc.detune.value = (i-1) * 4;
+    osc.detune.value = (i-1.5) * 3;
     const g = ac.createGain();
-    g.gain.value = i === 0 ? 1 : 0.4;
+    g.gain.value = [1, 0.4, 0.3, 0.15][i];
     osc.connect(g); g.connect(master);
     osc.start();
     return osc;
   });
 
+  // a slow, high, sparse overtone that fades in and out - distant, cosmic
+  const highOsc = ac.createOscillator();
+  highOsc.type = 'sine';
+  highOsc.frequency.value = 55*6;
+  const highGain = ac.createGain();
+  highGain.gain.value = 0;
+  highOsc.connect(highGain); highGain.connect(master);
+  highOsc.start();
+  const highLfo = ac.createOscillator();
+  highLfo.frequency.value = 0.03;
+  const highLfoGain = ac.createGain();
+  highLfoGain.gain.value = 0.02;
+  highLfo.connect(highLfoGain); highLfoGain.connect(highGain.gain);
+  highLfo.start();
+
+  // slow swell LFO on master gain - the "breathing" organ feel
   const lfo = ac.createOscillator();
-  lfo.frequency.value = 0.08;
+  lfo.frequency.value = 0.07;
   const lfoGain = ac.createGain();
-  lfoGain.gain.value = 0.015;
+  lfoGain.gain.value = 0.018;
   lfo.connect(lfoGain); lfoGain.connect(master.gain);
   lfo.start();
 
-  ambient = { master, oscs, lfo };
+  ambient = { master, oscs: [...oscs, highOsc], lfos: [lfo, highLfo] };
 }
 function stopAmbient(){
   if(!ambient) return;
@@ -310,7 +331,10 @@ function stopAmbient(){
     ambient.master.gain.setValueAtTime(ambient.master.gain.value, t);
     ambient.master.gain.linearRampToValueAtTime(0, t+0.8);
     const toStop = ambient;
-    setTimeout(()=>{ toStop.oscs.forEach(o=>o.stop()); toStop.lfo.stop(); }, 850);
+    setTimeout(()=>{
+      toStop.oscs.forEach(o=>o.stop());
+      toStop.lfos.forEach(l=>l.stop());
+    }, 850);
   } catch(e){}
   ambient = null;
 }
@@ -550,8 +574,11 @@ duckBtn.addEventListener('pointerleave', ()=>setDuck(false));
 // ----------------------------------------------------------------- UPDATE
 function updateTickingClock(){
   const progress = distance / LEVEL_LENGTH;
-  const tickInterval = Math.max(10, 36 - level*3 - progress*14);
-  if(frame % Math.round(tickInterval) === 0) sfxTick(0.5 + progress*0.3);
+  // accelerate harder near the end of the level - a "docking sequence" style
+  // tension build, not a steady metronome
+  const climax = Math.pow(progress, 2.2);
+  const tickInterval = Math.max(6, 36 - level*3 - climax*26);
+  if(frame % Math.round(tickInterval) === 0) sfxTick(0.5 + climax*0.6);
 }
 
 function updateGhost(){
@@ -662,6 +689,58 @@ function centerText(lines, startY=120, lineH=30){
   ctx.textAlign = 'left';
 }
 
+// drifting dust motes for the Dustbowl level
+const dustMotes = Array.from({length:40}, () => ({
+  x: Math.random()*LOGICAL_W, y: Math.random()*GROUND_Y, s: Math.random()*2+0.5, drift: Math.random()*0.4+0.1
+}));
+
+function drawThemeFx(theme){
+  if(theme.fx === 'dust'){
+    ctx.fillStyle = 'rgba(201,130,60,0.5)';
+    for(const d of dustMotes){
+      d.x -= worldSpeed*0.2 + d.drift;
+      d.y += Math.sin(frame*0.01 + d.x) * 0.15;
+      if(d.x < 0) d.x = LOGICAL_W;
+      ctx.fillRect(d.x, d.y, d.s, d.s);
+    }
+  } else if(theme.fx === 'wormhole'){
+    const cx = LOGICAL_W*0.8, cy = 70;
+    for(let i=0;i<4;i++){
+      const r = 18 + i*14 + (frame*0.6 % 14);
+      ctx.strokeStyle = `rgba(199,125,255,${0.35 - i*0.07})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI*2);
+      ctx.stroke();
+    }
+  } else if(theme.fx === 'horizon'){
+    const cx = LOGICAL_W*0.78, cy = 64;
+    const glow = ctx.createRadialGradient(cx,cy,2,cx,cy,50);
+    glow.addColorStop(0, 'rgba(0,0,0,1)');
+    glow.addColorStop(0.55, 'rgba(255,107,157,0.5)');
+    glow.addColorStop(1, 'rgba(255,107,157,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cx, cy, 50, 0, Math.PI*2); ctx.fill();
+  } else if(theme.fx === 'singularity'){
+    const cx = LOGICAL_W*0.76, cy = 60;
+    // accretion disc
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(frame*0.01);
+    ctx.scale(1, 0.35);
+    const disc = ctx.createRadialGradient(0,0,14,0,0,46);
+    disc.addColorStop(0, 'rgba(255,209,102,0)');
+    disc.addColorStop(0.6, 'rgba(255,209,102,0.55)');
+    disc.addColorStop(1, 'rgba(255,209,102,0)');
+    ctx.fillStyle = disc;
+    ctx.beginPath(); ctx.arc(0,0,46,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    // event horizon
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI*2); ctx.fill();
+  }
+}
+
 function drawBackground(theme){
   const grad = ctx.createLinearGradient(0,0,0,LOGICAL_H);
   grad.addColorStop(0, theme.skyTop);
@@ -677,6 +756,8 @@ function drawBackground(theme){
     }
     ctx.globalAlpha = 1;
   }
+
+  drawThemeFx(theme);
 
   ctx.fillStyle = theme.hill;
   for(const h of hills){
@@ -886,8 +967,8 @@ function draw(){
     drawBackground(theme);
     centerText([
       { text:'ECHO', font:'bold 44px monospace', color:'#06d6a0' },
-      { text:'race against your own ghost', font:'14px monospace' },
-      { text: LEVEL_THEMES.length+' levels · sync multiplier · duck + jump · 3 lives', font:'12px monospace', color:'#888' },
+      { text:'a journey through dust, gravity and your own echo', font:'13px monospace' },
+      { text: LEVEL_THEMES.length+' levels: dustbowl to singularity · sync multiplier · 3 lives', font:'11px monospace', color:'#888' },
       { text:'press SPACE to start', font:'16px monospace', color:'#ffd166' },
     ], 110, 34);
     return;

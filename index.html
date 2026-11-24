@@ -23,7 +23,7 @@
     <div>BEST <span id="best">0</span></div>
   </div>
   <canvas id="c" width="480" height="320"></canvas>
-  <div id="hint">SPACE jump &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; P pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
+  <div id="hint">UP / SPACE jump (hold for higher) &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; ESC pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -142,11 +142,11 @@ let inputLog = [], ghostLog = [], ghostPlayer = null, ghostIdx = 0, ghostDuckIdx
 let duckLog = [], ghostDuckLog = [];
 
 const LEVEL_THEMES = [
-  { name: 'MEADOW', bg: '#15151f', ground: '#2a2a3a', ob: '#ef476f', speed: 4,   gap: 240, stars:false },
-  { name: 'CANYON', bg: '#1a1420', ground: '#3a2a3a', ob: '#f78c6b', speed: 4.6, gap: 215, stars:false },
-  { name: 'VOID',   bg: '#0a0a16', ground: '#242450', ob: '#c77dff', speed: 5.2, gap: 195, stars:true },
-  { name: 'STORM',  bg: '#101018', ground: '#2a1f3a', ob: '#ff6b9d', speed: 5.8, gap: 180, stars:true },
-  { name: 'CORE',   bg: '#060608', ground: '#3a2a2a', ob: '#ffd166', speed: 6.6, gap: 165, stars:true },
+  { name: 'MEADOW', skyTop:'#2b2d5e', skyBot:'#15151f', hill:'#1f2140', ground: '#2a2a3a', ob: '#ef476f', speed: 4,   gap: 240, stars:false },
+  { name: 'CANYON', skyTop:'#3a2440', skyBot:'#1a1420', hill:'#2a1a30', ground: '#3a2a3a', ob: '#f78c6b', speed: 4.6, gap: 215, stars:false },
+  { name: 'VOID',   skyTop:'#101035', skyBot:'#0a0a16', hill:'#161638', ground: '#242450', ob: '#c77dff', speed: 5.2, gap: 195, stars:true },
+  { name: 'STORM',  skyTop:'#241533', skyBot:'#101018', hill:'#1c1228', ground: '#2a1f3a', ob: '#ff6b9d', speed: 5.8, gap: 180, stars:true },
+  { name: 'CORE',   skyTop:'#1a0a10', skyBot:'#060608', hill:'#200c10', ground: '#3a2a2a', ob: '#ffd166', speed: 6.6, gap: 165, stars:true },
 ];
 
 // obstacle types: 'ground' (jump over) and 'hang' (duck under)
@@ -159,7 +159,7 @@ function makeObstacles(theme){
     if(isHang){
       obs.push({ x, w: 26, h: 20, hang: true, y: GROUND_Y - 46 });
     } else {
-      obs.push({ x, w: 20, h: 20 + Math.random()*26, hang: false });
+      obs.push({ x, w: 20, h: 20 + Math.random()*26, hang: false, spike: Math.random() < 0.5 });
     }
   }
   return obs;
@@ -168,6 +168,10 @@ function makeObstacles(theme){
 // background stars for later levels
 let stars = [];
 for(let i=0;i<60;i++){ stars.push({ x: Math.random()*480, y: Math.random()*220, s: Math.random()*1.5+0.5 }); }
+
+// parallax hill silhouettes
+let hills = [];
+for(let i=0;i<6;i++){ hills.push({ x: i*160, w: 140+Math.random()*60, h: 40+Math.random()*50 }); }
 
 // particle trail behind the player
 let particles = [];
@@ -235,15 +239,21 @@ function jump(p){
   }
   return null;
 }
-function physics(p){ p.vy += GRAVITY; p.y += p.vy; if(p.y >= GROUND_Y){ p.y = GROUND_Y; p.vy = 0; p.onGround = true; } }
+function physics(p){
+  // fall faster than you rise - snappier, more "real" platformer feel
+  p.vy += p.vy > 0 ? GRAVITY * 1.5 : GRAVITY;
+  p.y += p.vy;
+  if(p.y >= GROUND_Y){ p.y = GROUND_Y; p.vy = 0; p.onGround = true; }
+}
 function rectsOverlap(a,b){ return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y; }
 
 window.addEventListener('keydown', (e)=>{
-  if(e.code === 'KeyP' && (state === 'playing' || state === 'paused')){
+  if(e.code === 'Escape' && (state === 'playing' || state === 'paused')){
+    e.preventDefault();
     state = state === 'playing' ? 'paused' : 'playing';
     return;
   }
-  if(e.code !== 'Space') return;
+  if(e.code !== 'Space' && e.code !== 'ArrowUp') return;
   e.preventDefault();
 
   if(state === 'title'){ startGame(); return; }
@@ -262,6 +272,11 @@ window.addEventListener('keydown', (e)=>{
     const result = jump(player);
     if(result === 'double') sfxDoubleJump();
     else if(result === 'ground') sfxJump();
+  }
+});
+window.addEventListener('keyup', (e)=>{
+  if((e.code === 'Space' || e.code === 'ArrowUp') && player && player.vy < -2){
+    player.vy *= 0.45; // short-hop: release early for a lower jump
   }
 });
 window.addEventListener('keydown', (e)=>{
@@ -404,7 +419,10 @@ function centerText(lines, startY=120, lineH=30){
 
 function draw(){
   const theme = LEVEL_THEMES[level-1] || LEVEL_THEMES[0];
-  ctx.fillStyle = theme.bg;
+  const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+  grad.addColorStop(0, theme.skyTop);
+  grad.addColorStop(1, theme.skyBot);
+  ctx.fillStyle = grad;
   ctx.fillRect(0,0,canvas.width,canvas.height);
 
   if(state === 'title'){
@@ -432,8 +450,28 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
+  // parallax hills
+  ctx.fillStyle = theme.hill;
+  for(const h of hills){
+    h.x -= worldSpeed*0.25; if(h.x < -h.w) h.x += hills.length*160;
+    ctx.beginPath();
+    ctx.moveTo(h.x, GROUND_Y+24);
+    ctx.quadraticCurveTo(h.x+h.w/2, GROUND_Y+24-h.h, h.x+h.w, GROUND_Y+24);
+    ctx.fill();
+  }
+
+  // ground with lane texture
   ctx.fillStyle = theme.ground;
-  ctx.fillRect(0, GROUND_Y+24, canvas.width, 4);
+  ctx.fillRect(0, GROUND_Y+24, canvas.width, 6);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([14,10]);
+  ctx.lineDashOffset = -distance;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND_Y+27);
+  ctx.lineTo(canvas.width, GROUND_Y+27);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
   // particle trail
   for(const pt of particles){
@@ -450,29 +488,72 @@ function draw(){
   }
   ctx.fillStyle = theme.ob;
   for(const o of obstacles){
-    if(o.hang) ctx.fillRect(o.x, o.y, o.w, o.h);
-    else ctx.fillRect(o.x, GROUND_Y-o.h, o.w, o.h);
+    if(o.hang){
+      ctx.fillRect(o.x, o.y, o.w, o.h);
+    } else if(o.spike){
+      ctx.beginPath();
+      ctx.moveTo(o.x, GROUND_Y);
+      ctx.lineTo(o.x+o.w/2, GROUND_Y-o.h);
+      ctx.lineTo(o.x+o.w, GROUND_Y);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillRect(o.x, GROUND_Y-o.h, o.w, o.h);
+    }
   }
-  ctx.fillStyle = '#ffd166';
-  for(const c of coins){ if(c.collected) continue; ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,Math.PI*2); ctx.fill(); }
+
+  // coins with glow + spin shimmer
+  for(const c of coins){
+    if(c.collected) continue;
+    ctx.save();
+    ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#ffd166';
+    const squish = Math.abs(Math.sin(frame*0.1 + c.x));
+    ctx.beginPath();
+    ctx.ellipse(c.x, c.y, c.r*squish+2, c.r, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   for(const pu of powerups){
     if(pu.collected) continue;
     ctx.save();
     ctx.translate(pu.x, pu.y);
     ctx.rotate(frame*0.05);
-    ctx.fillStyle = pu.type === 'shield' ? '#4cc9f0' : '#f72585';
+    const col = pu.type === 'shield' ? '#4cc9f0' : '#f72585';
+    ctx.shadowColor = col; ctx.shadowBlur = 12;
+    ctx.fillStyle = col;
     ctx.fillRect(-pu.r, -pu.r, pu.r*2, pu.r*2);
     ctx.restore();
   }
 
+  // player sprite: rounded body + visor, leans forward slightly, duck squashes it
   const ph = player.ducking ? 12 : player.h;
-  ctx.fillStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
-  ctx.fillRect(player.x, player.y-ph, player.w, ph);
+  const px = player.x, py = player.y - ph;
+  ctx.save();
   if(player.hasShield){
-    ctx.strokeStyle = '#4cc9f0';
+    ctx.shadowColor = '#4cc9f0'; ctx.shadowBlur = 14;
+  }
+  ctx.fillStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
+  const r = 6;
+  ctx.beginPath();
+  ctx.moveTo(px+r, py);
+  ctx.arcTo(px+player.w, py, px+player.w, py+ph, r);
+  ctx.arcTo(px+player.w, py+ph, px, py+ph, r);
+  ctx.arcTo(px, py+ph, px, py, r);
+  ctx.arcTo(px, py, px+player.w, py, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  // visor
+  ctx.fillStyle = 'rgba(10,10,20,0.6)';
+  ctx.fillRect(px+player.w*0.45, py+ph*0.2, player.w*0.5, ph*0.3);
+  if(player.hasShield){
+    ctx.strokeStyle = 'rgba(76,201,240,0.6)';
     ctx.lineWidth = 2;
-    ctx.strokeRect(player.x-3, player.y-ph-3, player.w+6, ph+6);
+    ctx.beginPath();
+    ctx.arc(px+player.w/2, py+ph/2, Math.max(player.w,ph)*0.9, 0, Math.PI*2);
+    ctx.stroke();
   }
 
   ctx.font = '14px monospace'; ctx.fillStyle = '#ffd166';
@@ -482,6 +563,13 @@ function draw(){
   ctx.font = '12px monospace'; ctx.fillStyle = '#888';
   ctx.fillText(theme.name, 10, 30);
   if(multiplier > 1){ ctx.fillStyle='#ffd166'; ctx.fillText('x'+multiplier, canvas.width-30, 30); }
+
+  // cinematic vignette
+  const vg = ctx.createRadialGradient(canvas.width/2,canvas.height/2,120,canvas.width/2,canvas.height/2,320);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
 
   if(state === 'paused'){
     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0,0,canvas.width,canvas.height);

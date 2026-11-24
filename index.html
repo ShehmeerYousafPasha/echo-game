@@ -1,34 +1,150 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>ECHO</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="description" content="ECHO — a free browser runner where you race against a recorded ghost of your own last attempt.">
+<meta name="theme-color" content="#0d0d14">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2315151f'/%3E%3Crect x='28' y='28' width='44' height='44' rx='10' fill='%2306d6a0'/%3E%3C/svg%3E">
+<title>ECHO — race your own ghost</title>
 <style>
-  html,body{margin:0;background:#0d0d14;overflow:hidden;height:100%;display:flex;align-items:center;justify-content:center;font-family:'Courier New',monospace;color:#eee}
-  #wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
-  canvas{background:#15151f;border:3px solid #333;border-radius:6px;box-shadow:0 0 40px rgba(6,214,160,0.15);touch-action:none}
-  #hud{display:flex;justify-content:space-between;width:480px;font-size:14px;letter-spacing:1px}
-  #hud span{color:#ffd166}
-  #hint,#touchHint{font-size:12px;color:#666}
-  #wrap.shake{animation:shk 0.25s}
+  :root{
+    --bg-deep:#07070c; --panel:#13131c; --panel-edge:#2a2a3a;
+    --accent:#06d6a0; --accent-dim:#0a8f6c; --warn:#ffd166; --danger:#ef476f;
+    --shield:#4cc9f0; --jump2:#f72585; --text:#eaeaf0; --text-dim:#7a7a8c;
+  }
+  *{box-sizing:border-box}
+  html,body{
+    margin:0; min-height:100%;
+    background:radial-gradient(circle at 50% 0%, #1b1b2e 0%, var(--bg-deep) 70%);
+    color:var(--text); font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:18px;
+  }
+  #app{ display:flex; flex-direction:column; align-items:center; gap:14px; width:100%; max-width:520px; }
+
+  header{ text-align:center; }
+  header h1{
+    margin:0; font-family:'Courier New',monospace; font-size:clamp(28px,7vw,40px);
+    letter-spacing:6px; color:var(--accent);
+    text-shadow:0 0 18px rgba(6,214,160,0.55), 0 0 2px rgba(6,214,160,0.9);
+  }
+  header p{ margin:4px 0 0; font-size:12.5px; color:var(--text-dim); letter-spacing:0.5px; }
+
+  #panel{
+    width:100%; background:linear-gradient(180deg,var(--panel),#0e0e16);
+    border:1px solid var(--panel-edge); border-radius:16px; padding:14px;
+    box-shadow:0 20px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+
+  #hud{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:13px; }
+  .hud-group{ display:flex; align-items:center; gap:10px; }
+  .hud-stat{ display:flex; flex-direction:column; align-items:flex-start; line-height:1.1; }
+  .hud-stat .label{ font-size:9px; letter-spacing:1.5px; color:var(--text-dim); text-transform:uppercase; }
+  .hud-stat .value{ font-size:16px; font-weight:700; color:var(--warn); font-variant-numeric:tabular-nums; }
+  #hearts{ display:flex; gap:3px; }
+  .heart{ width:14px; height:14px; position:relative; transform:rotate(-45deg); background:var(--danger); border-radius:3px 3px 0 0; transition:opacity .2s, transform .2s; }
+  .heart::before, .heart::after{ content:''; position:absolute; width:14px; height:14px; background:var(--danger); border-radius:50%; }
+  .heart::before{ left:-7px; top:0; }
+  .heart::after{ top:-7px; left:0; }
+  .heart.lost{ opacity:0.15; filter:grayscale(1); transform:rotate(-45deg) scale(0.85); }
+
+  #powerupStatus{ display:flex; gap:6px; }
+  .pu-badge{
+    width:22px; height:22px; border-radius:6px; display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:800; color:#0007; background:#2a2a3a; opacity:0.35; transition:all .2s;
+  }
+  .pu-badge.active{ opacity:1; box-shadow:0 0 10px currentColor; color:#000; }
+  .pu-badge.shield{ background:var(--shield); color:var(--shield); }
+  .pu-badge.shield.active{ background:var(--shield); }
+  .pu-badge.jump2{ background:var(--jump2); color:var(--jump2); }
+  .pu-badge.jump2.active{ background:var(--jump2); }
+
+  #canvasWrap{ position:relative; width:100%; border-radius:10px; overflow:hidden; line-height:0; touch-action:none; }
+  #canvasWrap.shake{ animation:shk 0.25s; }
+  canvas{ display:block; width:100%; height:auto; background:#15151f; touch-action:none; }
+
   @keyframes shk{
     0%{transform:translate(0,0)} 20%{transform:translate(-6px,4px)}
     40%{transform:translate(6px,-4px)} 60%{transform:translate(-4px,2px)}
     80%{transform:translate(4px,-2px)} 100%{transform:translate(0,0)}
   }
+
+  #controlsBar{ display:flex; justify-content:space-between; align-items:center; margin-top:10px; gap:8px; flex-wrap:wrap; }
+  #hint{ font-size:11px; color:var(--text-dim); }
+  #hint b{ color:var(--text); }
+  .iconbtn{
+    background:#1d1d2c; border:1px solid var(--panel-edge); color:var(--text-dim);
+    border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; font-family:inherit;
+  }
+  .iconbtn:hover{ color:var(--text); border-color:var(--accent-dim); }
+
+  #touchControls{ display:none; width:100%; justify-content:space-between; margin-top:10px; gap:10px; }
+  #touchControls button{
+    flex:1; padding:16px 0; font-size:14px; font-weight:700; letter-spacing:1px;
+    border-radius:12px; border:1px solid var(--panel-edge); background:#1a1a28; color:var(--text);
+    -webkit-tap-highlight-color:transparent; user-select:none;
+  }
+  #touchControls button:active{ background:var(--accent); color:#001b14; }
+  #duckBtn:active{ background:var(--shield); color:#001b2a; }
+
+  footer{ font-size:10.5px; color:#44445a; text-align:center; }
+
+  @media (hover:none) and (pointer:coarse){
+    #touchControls{ display:flex; }
+    #hint{ display:none; }
+  }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <div id="hud">
-    <div>SCORE <span id="score">0</span></div>
-    <div>LIVES <span id="lives">3</span></div>
-    <div>LEVEL <span id="level">1</span>/<span id="levelMax">5</span></div>
-    <div>BEST <span id="best">0</span></div>
+<div id="app">
+  <header>
+    <h1>ECHO</h1>
+    <p>race against your own ghost</p>
+  </header>
+
+  <div id="panel">
+    <div id="hud">
+      <div class="hud-group">
+        <div class="hud-stat">
+          <span class="label">Score</span>
+          <span class="value" id="score">0</span>
+        </div>
+        <div class="hud-stat">
+          <span class="label">Best</span>
+          <span class="value" id="best">0</span>
+        </div>
+      </div>
+      <div class="hud-group">
+        <div id="powerupStatus">
+          <div class="pu-badge shield" id="badgeShield" title="Shield">S</div>
+          <div class="pu-badge jump2" id="badgeJump2" title="Double jump">D</div>
+        </div>
+        <div id="hearts"></div>
+      </div>
+      <div class="hud-stat" style="align-items:flex-end">
+        <span class="label">Level</span>
+        <span class="value"><span id="level">1</span>/<span id="levelMax">5</span></span>
+      </div>
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="c" width="480" height="320"></canvas>
+    </div>
+
+    <div id="controlsBar">
+      <div id="hint">
+        <b>Up/Space</b> jump &middot; <b>Down</b> duck &middot; <b>Esc</b> pause &middot; cyan=shield pink=double-jump
+      </div>
+      <button class="iconbtn" id="pauseBtn">Pause</button>
+    </div>
+
+    <div id="touchControls">
+      <button id="duckBtn">DUCK</button>
+      <button id="jumpBtn">JUMP</button>
+    </div>
   </div>
-  <canvas id="c" width="480" height="320"></canvas>
-  <div id="hint">UP / SPACE jump (hold for higher) &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; ESC pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
-  <div id="touchHint" style="display:none">Tap top half to jump &middot; hold bottom half to duck</div>
+
+  <footer>free &middot; offline &middot; no accounts &middot; your best score is saved on this device</footer>
 </div>
 <script>
 'use strict';
@@ -67,12 +183,28 @@ const FINISH_LEAD = 80;
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const scoreEl = document.getElementById('score');
-const livesEl = document.getElementById('lives');
 const levelEl = document.getElementById('level');
 const levelMaxEl = document.getElementById('levelMax');
 const bestEl = document.getElementById('best');
-const wrapEl = document.getElementById('wrap');
+const wrapEl = document.getElementById('canvasWrap');
+const heartsEl = document.getElementById('hearts');
+const badgeShieldEl = document.getElementById('badgeShield');
+const badgeJump2El = document.getElementById('badgeJump2');
+const pauseBtn = document.getElementById('pauseBtn');
 levelMaxEl.textContent = LEVEL_THEMES.length;
+
+function renderHearts(){
+  heartsEl.innerHTML = '';
+  for(let i=0;i<3;i++){
+    const h = document.createElement('div');
+    h.className = 'heart' + (i >= lives ? ' lost' : '');
+    heartsEl.appendChild(h);
+  }
+}
+function renderPowerupBadges(){
+  badgeShieldEl.classList.toggle('active', !!(player && player.hasShield));
+  badgeJump2El.classList.toggle('active', !!(player && player.doubleJumpAvailable));
+}
 
 // --------------------------------------------------------- PERSISTENCE
 let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10);
@@ -257,6 +389,7 @@ function startLevel(keepGhost){
   powerups = makePowerups();
   multiplier = 1; syncCooldown = 0;
   popups = []; particles = [];
+  renderPowerupBadges();
 
   if(keepGhost && inputLog && inputLog.length){
     ghostLog = inputLog.slice();
@@ -275,7 +408,7 @@ function startLevel(keepGhost){
 function startGame(){
   level = 1; lives = 3; score = 0;
   ghostLog = []; ghostDuckLog = []; ghostPlayer = null;
-  livesEl.textContent = lives;
+  renderHearts();
   levelEl.textContent = level;
   scoreEl.textContent = 0;
   startLevel(false);
@@ -284,7 +417,8 @@ function startGame(){
 
 function loseLife(){
   lives--;
-  livesEl.textContent = lives;
+  renderHearts();
+  renderPowerupBadges();
   sfxHit();
   spawnBurst(player.x+player.w/2, player.y-player.h/2, '#ef476f', 20);
   wrapEl.classList.remove('shake'); void wrapEl.offsetWidth; wrapEl.classList.add('shake');
@@ -376,24 +510,26 @@ window.addEventListener('keyup', (e)=>{
   if(e.code === 'Space' || e.code === 'ArrowUp') shortHop(player);
 });
 
-// touch controls: tap top half = jump, hold bottom half = duck,
-// tap anywhere on a non-playing screen advances it
-if('ontouchstart' in window){
-  document.getElementById('touchHint').style.display = 'block';
-  canvas.addEventListener('touchstart', (e)=>{
-    e.preventDefault();
-    if(state !== 'playing'){ advanceFromEndScreen(); return; }
-    const rect = canvas.getBoundingClientRect();
-    const touchY = e.touches[0].clientY - rect.top;
-    if(touchY > canvas.height/2) setDuck(true);
-    else tryJump();
-  }, { passive:false });
-  canvas.addEventListener('touchend', (e)=>{
-    e.preventDefault();
-    setDuck(false);
-    shortHop(player);
-  }, { passive:false });
-}
+pauseBtn.addEventListener('click', ()=>{
+  if(state === 'playing' || state === 'paused'){
+    state = state === 'playing' ? 'paused' : 'playing';
+  }
+});
+
+// tapping the canvas on any non-playing screen (title/dead/clear/etc) advances it
+canvas.addEventListener('pointerdown', ()=>{
+  if(state !== 'playing') advanceFromEndScreen();
+});
+
+// dedicated on-screen jump/duck buttons (shown on touch devices via CSS)
+const jumpBtn = document.getElementById('jumpBtn');
+const duckBtn = document.getElementById('duckBtn');
+jumpBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); tryJump(); });
+jumpBtn.addEventListener('pointerup', ()=>shortHop(player));
+jumpBtn.addEventListener('pointerleave', ()=>shortHop(player));
+duckBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); setDuck(true); });
+duckBtn.addEventListener('pointerup', ()=>setDuck(false));
+duckBtn.addEventListener('pointerleave', ()=>setDuck(false));
 
 // ----------------------------------------------------------------- UPDATE
 function updateTickingClock(){
@@ -491,6 +627,7 @@ function update(){
 
   if(updateObstacleCollisions()) return; // life lost this frame, stop here
   updatePickups();
+  renderPowerupBadges();
 
   popups = popups.filter(p => (p.life-- > 0));
 
@@ -749,6 +886,8 @@ function loop(){
   draw();
   requestAnimationFrame(loop);
 }
+renderHearts();
+renderPowerupBadges();
 loop();
 </script>
 </body>

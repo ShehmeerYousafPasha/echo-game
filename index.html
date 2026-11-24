@@ -711,6 +711,8 @@ function update(){
   score += 1 * multiplier;
   scoreEl.textContent = Math.floor(score/5);
 
+  updateParallax();
+
   updateTickingClock();
 
   physics(player);
@@ -751,13 +753,30 @@ const dustMotes = Array.from({length:40}, () => ({
   x: Math.random()*LOGICAL_W, y: Math.random()*GROUND_Y, s: Math.random()*2+0.5, drift: Math.random()*0.4+0.1
 }));
 
+// moves all background parallax layers by exactly one logic tick's worth of
+// distance - called only from the fixed-timestep update(), never from draw(),
+// so background scroll speed can't drift away from the game world's speed
+// on high-refresh-rate displays
+function updateParallax(){
+  for(const d of dustMotes){
+    d.x -= worldSpeed*0.2 + d.drift;
+    d.y += Math.sin(frame*0.01 + d.x) * 0.15;
+    if(d.x < 0) d.x = LOGICAL_W;
+  }
+  for(const s of stars){
+    s.x -= worldSpeed*0.15;
+    if(s.x < 0) s.x = LOGICAL_W;
+  }
+  for(const h of hills){
+    h.x -= worldSpeed*0.25;
+    if(h.x < -h.w) h.x += hills.length*160;
+  }
+}
+
 function drawThemeFx(theme){
   if(theme.fx === 'dust'){
     ctx.fillStyle = 'rgba(201,130,60,0.5)';
     for(const d of dustMotes){
-      d.x -= worldSpeed*0.2 + d.drift;
-      d.y += Math.sin(frame*0.01 + d.x) * 0.15;
-      if(d.x < 0) d.x = LOGICAL_W;
       ctx.fillRect(d.x, d.y, d.s, d.s);
     }
   } else if(theme.fx === 'wormhole'){
@@ -808,7 +827,6 @@ function drawBackground(theme){
   if(theme.stars){
     ctx.fillStyle = '#fff';
     for(const s of stars){
-      s.x -= worldSpeed*0.15; if(s.x < 0) s.x = LOGICAL_W;
       ctx.globalAlpha = 0.5; ctx.fillRect(s.x, s.y, s.s, s.s);
     }
     ctx.globalAlpha = 1;
@@ -818,7 +836,6 @@ function drawBackground(theme){
 
   ctx.fillStyle = theme.hill;
   for(const h of hills){
-    h.x -= worldSpeed*0.25; if(h.x < -h.w) h.x += hills.length*160;
     ctx.beginPath();
     ctx.moveTo(h.x, GROUND_Y+24);
     ctx.quadraticCurveTo(h.x+h.w/2, GROUND_Y+24-h.h, h.x+h.w, GROUND_Y+24);
@@ -1072,15 +1089,38 @@ function draw(){
 }
 
 // ------------------------------------------------------------------ LOOP
-function loop(){
-  if(state === 'playing') update();
-  uiTick++;
+// Fixed-timestep loop: game logic always advances in identical 1/60s steps,
+// decoupled from the display's actual refresh rate. Without this, the game
+// would run faster on a 120Hz/144Hz monitor and stutter unevenly whenever a
+// frame is dropped - this keeps movement speed and physics perfectly
+// consistent on every screen, and keeps visuals smooth by still drawing
+// every animation frame even when a logic step doesn't run.
+const STEP_MS = 1000 / 60;
+const MAX_STEPS_PER_FRAME = 5; // avoids a "spiral of death" after a long stall (e.g. tab backgrounded)
+let lastTime = null;
+let accumulator = 0;
+
+function loop(now){
+  if(lastTime === null) lastTime = now;
+  let delta = now - lastTime;
+  lastTime = now;
+  if(delta > 250) delta = 250; // clamp huge gaps (tab was hidden, debugger paused, etc.)
+  accumulator += delta;
+
+  let steps = 0;
+  while(accumulator >= STEP_MS && steps < MAX_STEPS_PER_FRAME){
+    if(state === 'playing') update();
+    uiTick++;
+    accumulator -= STEP_MS;
+    steps++;
+  }
+
   draw();
   requestAnimationFrame(loop);
 }
 renderHearts();
 renderPowerupBadges();
-loop();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>

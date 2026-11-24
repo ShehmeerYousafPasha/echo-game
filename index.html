@@ -24,6 +24,7 @@
   </div>
   <canvas id="c" width="480" height="320"></canvas>
   <div id="hint">UP / SPACE jump (hold for higher) &nbsp;|&nbsp; DOWN duck &nbsp;|&nbsp; ESC pause &nbsp;|&nbsp; cyan = shield, pink = double jump</div>
+  <div id="touchHint" style="font-size:12px;color:#555;display:none">Tap top half to jump &middot; hold bottom half to duck</div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -176,7 +177,13 @@ for(let i=0;i<6;i++){ hills.push({ x: i*160, w: 140+Math.random()*60, h: 40+Math
 // particle trail behind the player
 let particles = [];
 function spawnTrail(p){
-  particles.push({ x:p.x+p.w/2, y:p.y-p.h/2, life:16, vx:-worldSpeed*0.3-Math.random(), vy:(Math.random()-0.5) });
+  particles.push({ x:p.x+p.w/2, y:p.y-p.h/2, life:16, vx:-worldSpeed*0.3-Math.random(), vy:(Math.random()-0.5), c:'#06d6a0', size:3 });
+}
+function spawnBurst(x, y, color, count=14){
+  for(let i=0;i<count;i++){
+    const a = Math.random()*Math.PI*2, sp = 1+Math.random()*3;
+    particles.push({ x, y, life:30, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp, c:color, size:3 });
+  }
 }
 
 let shakeFrames = 0;
@@ -279,6 +286,37 @@ window.addEventListener('keyup', (e)=>{
     player.vy *= 0.45; // short-hop: release early for a lower jump
   }
 });
+
+// touch controls: tap top half = jump, hold bottom half = duck
+if('ontouchstart' in window){
+  document.getElementById('touchHint').style.display = 'block';
+  canvas.addEventListener('touchstart', (e)=>{
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const touchY = e.touches[0].clientY - rect.top;
+    if(state === 'title' || state === 'dead' || state === 'levelclear' || state === 'victory' || state === 'gameover'){
+      window.dispatchEvent(new KeyboardEvent('keydown', { code:'Space' }));
+      return;
+    }
+    if(touchY > canvas.height/2){
+      player.ducking = true;
+      duckLog.push({ frame, down: true });
+    } else {
+      inputLog.push(frame);
+      const result = jump(player);
+      if(result === 'double') sfxDoubleJump();
+      else if(result === 'ground') sfxJump();
+    }
+  }, { passive:false });
+  canvas.addEventListener('touchend', (e)=>{
+    e.preventDefault();
+    if(player && player.ducking){
+      player.ducking = false;
+      duckLog.push({ frame, down: false });
+    }
+    if(player && player.vy < -2) player.vy *= 0.45;
+  }, { passive:false });
+}
 window.addEventListener('keydown', (e)=>{
   if(e.code === 'ArrowDown' && state === 'playing' && !player.ducking){
     player.ducking = true;
@@ -296,6 +334,7 @@ function endRunLoseLife(){
   lives--;
   livesEl.textContent = lives;
   sfxHit();
+  spawnBurst(player.x+player.w/2, player.y-player.h/2, '#ef476f', 20);
   wrapEl.classList.remove('shake'); void wrapEl.offsetWidth; wrapEl.classList.add('shake');
   if(lives <= 0){
     if(score > best){ best = score; localStorage.setItem(BEST_KEY, best); bestEl.textContent = best; }
@@ -473,11 +512,12 @@ function draw(){
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // particle trail
+  // particle trail / bursts
   for(const pt of particles){
-    ctx.globalAlpha = Math.max(pt.life/16, 0) * 0.5;
-    ctx.fillStyle = '#06d6a0';
-    ctx.fillRect(pt.x, pt.y, 3, 3);
+    ctx.globalAlpha = Math.max(pt.life/30, 0) * 0.7;
+    ctx.fillStyle = pt.c || '#06d6a0';
+    const s = pt.size || 3;
+    ctx.fillRect(pt.x, pt.y, s, s);
   }
   ctx.globalAlpha = 1;
 
@@ -548,6 +588,19 @@ function draw(){
   // visor
   ctx.fillStyle = 'rgba(10,10,20,0.6)';
   ctx.fillRect(px+player.w*0.45, py+ph*0.2, player.w*0.5, ph*0.3);
+
+  // animated running legs (only when grounded and not ducking)
+  if(player.onGround && !player.ducking){
+    const legPhase = Math.sin(frame*0.5);
+    ctx.strokeStyle = player.hasShield ? '#4cc9f0' : '#06d6a0';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(px+6, py+ph);
+    ctx.lineTo(px+6+legPhase*5, py+ph+7);
+    ctx.moveTo(px+player.w-6, py+ph);
+    ctx.lineTo(px+player.w-6-legPhase*5, py+ph+7);
+    ctx.stroke();
+  }
   if(player.hasShield){
     ctx.strokeStyle = 'rgba(76,201,240,0.6)';
     ctx.lineWidth = 2;
